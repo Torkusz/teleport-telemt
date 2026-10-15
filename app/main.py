@@ -563,7 +563,9 @@ def validate(body: InstIn, current=None):
     for o in store.d["instances"]:
         if o["port"] == body.port and (current is None or o["id"] != current["id"]):
             raise HTTPException(400, f"Порт {body.port} уже используется инстансом «{o['name']}»")
-    if current is None or current["port"] != body.port:
+    # порт проверяем при создании, смене порта и включении: если инстанс сейчас работает на этом порту, он сам его держит
+    own_running = current is not None and current["port"] == body.port and ensure_runner(current["id"]).running
+    if body.enabled and not own_running:
         if not port_free(body.port):
             raise HTTPException(400, f"Порт {body.port} занят другим процессом на сервере")
     if not HOST_RE.match(body.sni):
@@ -634,7 +636,10 @@ async def delete_instance(iid: int):
 
 @app.post("/api/instances/{iid}/restart", dependencies=[Depends(require_auth)])
 async def restart(iid: int):
-    await restart_instance(store.get(iid))
+    inst = store.get(iid)
+    if inst["enabled"] and not ensure_runner(iid).running and not port_free(inst["port"]):
+        raise HTTPException(400, f"Порт {inst['port']} занят другим процессом на сервере")
+    await restart_instance(inst)
     return {"ok": True}
 
 
