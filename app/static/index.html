@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>telemt panel</title>
+<style>
+:root{
+  --bg:#e9eeed; --surface:#fff; --ink:#15222b; --muted:#566a73; --line:#c9d4d2;
+  --accent:#0d6666; --accent-ink:#fff; --ok:#1e7a46; --warn:#a85200; --bad:#b3261e; --soft:#f3f6f5;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0f1719; --surface:#172326; --ink:#e3ecea; --muted:#8fa5a9; --line:#2a3b3f; --accent:#3fb6b0; --accent-ink:#06201f; --ok:#5cc88a; --warn:#e8a04a; --bad:#ef7d74; --soft:#1c2c30}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 var(--sans)}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:var(--surface);padding:7px 12px;border-radius:6px}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button.danger{color:var(--bad)}
+button:focus-visible,input:focus-visible,select:focus-visible,tr[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input,select{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:7px 9px;width:100%}
+label{display:block;margin:0 0 12px;color:var(--muted);font-size:13px}
+label input,label select{margin-top:4px;color:var(--ink);font-size:15px}
+label.inline{display:flex;gap:8px;align-items:center}
+label.inline input{width:auto;margin:0}
+.hint{color:var(--muted);font-size:13px;margin:-6px 0 12px}
+header{display:flex;align-items:center;gap:12px;padding:14px 24px;background:var(--surface);border-bottom:1px solid var(--line)}
+header h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
+header .host{font-family:var(--mono);font-size:13px;color:var(--muted);background:var(--soft);padding:3px 8px;border-radius:5px}
+header .sp{flex:1}
+main{max-width:1100px;margin:24px auto;padding:0 16px}
+.panelbox{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:auto}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:13px;padding:10px 14px;border-bottom:1px solid var(--line)}
+td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--soft)}
+.port{font-family:var(--mono);font-size:24px;font-weight:600;letter-spacing:-.5px}
+.num{font-family:var(--mono);text-align:right}
+th.num{text-align:right}
+.led{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--muted);margin-right:8px;vertical-align:-1px}
+.led.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent)}
+.led.warn{background:var(--warn)} .led.bad{background:var(--bad)}
+.sub{color:var(--muted);font-size:13px}
+.empty{padding:40px 24px;text-align:center}
+.empty h2{margin:0 0 6px;font-size:19px}
+.empty p{color:var(--muted);max-width:520px;margin:0 auto 18px}
+.overlay{position:fixed;inset:0;background:rgba(10,20,22,.45);display:flex;justify-content:flex-end;z-index:10}
+.overlay.center{justify-content:center;align-items:center}
+.drawer{width:min(640px,100%);height:100%;background:var(--surface);overflow:auto;padding:20px 22px}
+.dialog{width:min(460px,92vw);max-height:92vh;overflow:auto;background:var(--surface);border-radius:10px;padding:22px}
+.drawer h2,.dialog h2{margin:0 0 4px;font-size:19px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:14px 0 16px}
+.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:8px 12px;color:var(--muted)}
+.tabs button.on{color:var(--ink);border-color:var(--accent)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.user{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px}
+.user .name{font-weight:600}
+.user .link{font-family:var(--mono);font-size:12px;word-break:break-all;color:var(--muted);margin:8px 0;background:var(--soft);padding:6px 8px;border-radius:5px}
+.check{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.check:last-child{border:0}
+.check b{display:block}
+pre.log{background:#0c1416;color:#c8d8d6;font:12px/1.4 var(--mono);padding:12px;border-radius:8px;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-all}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;z-index:30}
+.toast.err{background:var(--bad);color:#fff}
+.preset{display:block;width:100%;text-align:left;margin-bottom:6px}
+.login{max-width:340px;margin:18vh auto;background:var(--surface);padding:24px;border-radius:10px;border:1px solid var(--line)}
+@media(max-width:700px){.hide-s{display:none}.port{font-size:20px}}
+@media(prefers-reduced-motion:no-preference){.led.ok{transition:box-shadow .3s}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const $app = document.getElementById('app');
+let S = null, openId = null, tab = 'users', poll = null, logTimer = null, presets = [];
+
+function h(tag, a, ...kids){
+  const e = document.createElement(tag);
+  for (const [k,v] of Object.entries(a||{})){
+    if (k==='class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k,'');
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c));
+  return e;
+}
+async function api(method, url, body){
+  const r = await fetch(url, {method, headers:{'Content-Type':'application/json','X-Requested-With':'panel'}, body: body?JSON.stringify(body):undefined});
+  if (r.status === 401 && url !== '/api/login'){ showLogin(); throw new Error('login'); }
+  const d = await r.json().catch(()=>({}));
+  if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : 'Ошибка '+r.status);
+  return d;
+}
+function toast(msg, err){
+  const t = h('div',{class:'toast'+(err?' err':''),role:'status'},msg); document.body.append(t); setTimeout(()=>t.remove(), 3500);
+}
+async function act(fn, ok){ try{ await fn(); if (ok) toast(ok); await refresh(); }catch(e){ if (e.message!=='login') toast(e.message,true); } }
+const fmtB = n => n<1024?n+' Б':n<1048576?(n/1024).toFixed(1)+' КБ':n<1073741824?(n/1048576).toFixed(1)+' МБ':(n/1073741824).toFixed(2)+' ГБ';
+const fmtT = s => s<60?s+' с':s<3600?Math.floor(s/60)+' мин':s<86400?Math.floor(s/3600)+' ч':Math.floor(s/86400)+' д';
+async function copy(text){
+  try{ await navigator.clipboard.writeText(text); toast('Скопировано'); }
+  catch{ const t=h('textarea',{},text); document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); toast('Скопировано'); }
+}
+
+function showLogin(){
+  clearInterval(poll); $app.replaceChildren();
+  const pw = h('input',{type:'password',autocomplete:'current-password',autofocus:true});
+  const go = async ()=>{ try{ await api('POST','/api/login',{password:pw.value}); start(); }catch(e){ toast(e.message,true); } };
+  pw.addEventListener('keydown',e=>{ if(e.key==='Enter') go(); });
+  $app.append(h('div',{class:'login'}, h('h2',{style:'margin-top:0'},'Вход в панель'), h('label',{},'Пароль администратора',pw), h('button',{class:'primary',onclick:go},'Войти')));
+}
+
+function ledOf(i){
+  if (!i.enabled) return ['','Выключен'];
+  if (!i.status.running) return ['bad','Не запущен'];
+  if (!i.status.api) return ['warn','Запускается'];
+  return ['ok','Работает'];
+}
+
+function render(){
+  if (!S) return;
+  const root = h('div');
+  root.append(h('header',{},
+    h('h1',{},'telemt panel'),
+    h('span',{class:'host',title:'Адрес в ссылках для клиентов'}, S.settings.public_host || S.settings.detected_host || 'адрес не определён'),
+    h('span',{class:'sp'}),
+    h('button',{onclick:systemDialog},'Система'),
+    h('button',{class:'primary',onclick:()=>instanceDialog()},'Добавить инстанс'),
+    h('button',{onclick:async()=>{ await api('POST','/api/logout'); showLogin(); }},'Выйти')));
+  const main = h('main'); root.append(main);
+  if (!S.instances.length){
+    main.append(h('div',{class:'panelbox empty'}, h('h2',{},'Инстансов пока нет'),
+      h('p',{},'Несколько инстансов на разных портах с разными маскировочными доменами — запас на случай, если один порт начнут душить. Порты и домены вы задаёте сами.'),
+      h('div',{class:'row',style:'justify-content:center'},
+        h('button',{class:'primary',onclick:quickDialog},'Быстрый старт'),
+        h('button',{onclick:()=>instanceDialog()},'Один инстанс вручную'))));
+  } else {
+    const tbody = h('tbody');
+    for (const i of S.instances){
+      const [cls,txt] = ledOf(i);
+      const conns = i.users.reduce((a,u)=>a+u.connections,0);
+      tbody.append(h('tr',{tabindex:0,onclick:()=>openInstance(i.id),onkeydown:e=>{if(e.key==='Enter')openInstance(i.id)}},
+        h('td',{}, h('span',{class:'led '+cls}), txt),
+        h('td',{}, h('div',{class:'port'},i.port), h('div',{class:'sub'},i.name)),
+        h('td',{class:'hide-s'}, i.sni, h('div',{class:'sub'}, 'MSS: '+(i.mss||'авто'))),
+        h('td',{class:'num'},conns),
+        h('td',{class:'num hide-s'},i.stats.connections_total),
+        h('td',{class:'num hide-s',style:i.stats.bad_total?'color:var(--warn)':''},i.stats.bad_total)));
+    }
+    main.append(h('div',{class:'panelbox'}, h('table',{},
+      h('thead',{}, h('tr',{}, h('th',{},'Состояние'),h('th',{},'Порт'),h('th',{class:'hide-s'},'Маска (SNI)'),h('th',{class:'num'},'Онлайн'),h('th',{class:'num hide-s'},'Всего'),h('th',{class:'num hide-s'},'Отбраковано'))),
+      tbody)));
+    main.append(h('p',{class:'sub'},'Порты, лимит соединений, keepalive и BBR настраиваются в разделе «Система».'));
+  }
+  $app.replaceChildren(root);
+  const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#drawer-layer') && ['INPUT','SELECT'].includes(document.activeElement.tagName);
+  if (openId != null && !typing) drawDrawer();
+}
+
+/* ---------- drawer ---------- */
+function openInstance(id){ openId = id; tab = 'users'; drawDrawer(); }
+function closeDrawer(){ openId = null; clearInterval(logTimer); document.getElementById('drawer-layer')?.remove(); }
+function drawDrawer(){
+  clearInterval(logTimer);
+  const i = S.instances.find(x=>x.id===openId);
+  document.getElementById('drawer-layer')?.remove();
+  if (!i){ openId=null; return; }
+  const body = h('div');
+  if (tab==='users') usersTab(body,i);
+  if (tab==='diag') diagTab(body,i);
+  if (tab==='logs') logsTab(body,i);
+  if (tab==='cfg') cfgTab(body,i);
+  const [cls,txt] = ledOf(i);
+  const tabBtn = (k,t)=>h('button',{class:tab===k?'on':'',onclick:()=>{tab=k;clearInterval(logTimer);drawDrawer();}},t);
+  const layer = h('div',{class:'overlay',id:'drawer-layer',onclick:e=>{if(e.target===layer)closeDrawer()}},
+    h('div',{class:'drawer',role:'dialog','aria-label':'Инстанс '+i.name},
+      h('div',{class:'row'}, h('div',{style:'flex:1'}, h('h2',{},'Порт '+i.port), h('div',{class:'sub'}, h('span',{class:'led '+cls}),txt+' · '+i.sni+(i.status.running?' · '+fmtT(i.status.uptime):''))),
+        h('button',{onclick:closeDrawer},'Закрыть')),
+      h('div',{class:'tabs'}, tabBtn('users','Пользователи'),tabBtn('diag','Диагностика'),tabBtn('logs','Логи'),tabBtn('cfg','Настройки')),
+      body));
+  document.body.append(layer);
+}
+function usersTab(body,i){
+  for (const u of i.users){
+    body.append(h('div',{class:'user'},
+      h('div',{class:'row'}, h('span',{class:'name',style:'flex:1'},u.name), h('span',{class:'sub'},`онлайн ${u.connections} · IP ${u.ips} · ${fmtB(u.octets)}`)),
+      h('div',{class:'link'},u.link),
+      !u.link_from_api && h('div',{class:'hint',style:'margin:0 0 8px'},'Ссылка собрана панелью (telemt ещё не ответил). Если не работает — подождите минуту.'),
+      h('div',{class:'row'},
+        h('button',{class:'primary',onclick:()=>copy(u.link)},'Копировать tg://'),
+        h('button',{onclick:()=>copy(u.web_link)},'Копировать t.me'),
+        h('button',{onclick:()=>confirm('Выпустить новый секрет? Старая ссылка перестанет работать.')&&act(()=>api('POST',`/api/instances/${i.id}/users/${encodeURIComponent(u.name)}/rotate`),'Секрет обновлён')},'Новый секрет'),
+        h('button',{class:'danger',onclick:()=>confirm('Удалить пользователя '+u.name+'?')&&act(()=>api('DELETE',`/api/instances/${i.id}/users/${encodeURIComponent(u.name)}`),'Удалён')},'Удалить'))));
+  }
+  const nm = h('input',{placeholder:'имя, например anna',maxlength:64});
+  body.append(h('div',{class:'row'}, nm, h('button',{onclick:()=>nm.value&&act(()=>api('POST',`/api/instances/${i.id}/users`,{name:nm.value}),'Пользователь добавлен')},'Добавить')));
+  body.append(h('p',{class:'hint'},'Одной ссылкой может пользоваться любое число людей. Отдельные пользователи нужны, чтобы видеть статистику и отзывать доступ.'));
+}
+async function diagTab(body,i){
+  body.append(h('p',{class:'sub'},'Проверяем…'));
+  try{
+    const d = await api('GET',`/api/instances/${i.id}/diagnostics`);
+    body.replaceChildren(...d.checks.map(c=>h('div',{class:'check'}, h('span',{class:'led '+({ok:'ok',warn:'warn',bad:'bad'}[c.level]||'')}), h('div',{}, h('b',{},c.title), h('span',{class:'sub'},c.detail)))),
+      h('button',{onclick:()=>drawDrawer(),style:'margin-top:12px'},'Проверить снова'));
+  }catch(e){ if(e.message!=='login') body.replaceChildren(h('p',{},e.message)); }
+}
+function logsTab(body,i){
+  const pre = h('pre',{class:'log'},'…'); body.append(pre);
+  const load = async()=>{ try{ const d=await api('GET',`/api/instances/${i.id}/logs`); const stick = pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30; pre.textContent=d.lines.join('\n')||'Логов пока нет'; if(stick)pre.scrollTop=pre.scrollHeight; }catch{} };
+  load(); logTimer=setInterval(load,3000);
+}
+function cfgTab(body,i){
+  const f = formFields(i);
+  body.append(f.el, h('div',{class:'row'},
+    h('button',{class:'primary',onclick:()=>act(async()=>{await api('PATCH','/api/instances/'+i.id,f.get());},'Сохранено, инстанс перезапущен')},'Сохранить и перезапустить'),
+    h('button',{onclick:()=>act(()=>api('POST',`/api/instances/${i.id}/restart`),'Перезапущен')},'Только перезапуск'),
+    h('button',{class:'danger',onclick:()=>confirm('Удалить инстанс вместе с пользователями?')&&act(async()=>{await api('DELETE','/api/instances/'+i.id);closeDrawer();},'Удалён')},'Удалить')));
+  body.append(h('p',{class:'hint',style:'margin-top:14px'},'После смены SNI или порта прежние ссылки перестанут работать — раздайте новые.'));
+}
+
+/* ---------- формы ---------- */
+function formFields(i){
+  const v = i||{port:'',sni:'',mss:'tspu',middle_proxy:false,ad_tag:'',mask_host:'',mask_port:443,enabled:true,name:''};
+  const name=h('input',{value:v.name,placeholder:'необязательно',maxlength:40});
+  const port=h('input',{type:'number',min:1,max:65535,value:v.port});
+  const sni=h('input',{value:v.sni,placeholder:'www.cloudflare.com'});
+  const mssSel=h('select',{}, h('option',{value:'tspu'},'tspu (MSS 92) — рекомендуется для РФ'), h('option',{value:''},'Выключено'), h('option',{value:'custom'},'Своё значение'));
+  const mssNum=h('input',{type:'number',min:40,max:1460,placeholder:'например 88'});
+  if (v.mss==='tspu') mssSel.value='tspu'; else if (v.mss==='') mssSel.value=''; else { mssSel.value='custom'; mssNum.value=v.mss; }
+  const mssWrap=h('div'); const syncM=()=>{mssNum.style.display=mssSel.value==='custom'?'':'none'}; mssSel.addEventListener('change',syncM); syncM();
+  const mm=h('input',{type:'checkbox',checked:v.middle_proxy}); const ad=h('input',{value:v.ad_tag,placeholder:'32 hex от @MTProxybot'});
+  const mh=h('input',{value:v.mask_host,placeholder:'пусто = SNI-домен'}); const mp=h('input',{type:'number',value:v.mask_port});
+  const adv=h('details',{}, h('summary',{style:'cursor:pointer;color:var(--muted);margin-bottom:10px'},'Дополнительно'),
+    h('label',{class:'inline'},mm,'Использовать middle-proxy'),
+    h('label',{},'ad_tag (спонсорский канал; включает middle-proxy)',ad),
+    h('label',{},'mask_host — куда пересылать «чужие» соединения (например, свой сайт)',mh),
+    h('label',{},'mask_port',mp));
+  const en=h('input',{type:'checkbox',checked:v.enabled});
+  const el=h('div',{}, h('label',{},'Название',name), h('label',{},'Порт',port), h('label',{},'Маскировочный домен (SNI)',sni),
+    h('div',{class:'hint'},'Берите крупные сайты, к которым ходит весь интернет. Telemt подтянет их настоящий сертификат.'),
+    h('label',{},'Фрагментация ClientHello (client_mss)',mssSel,mssNum),
+    h('div',{class:'hint'},'Против JA4-детекта на ТСПУ. Если iOS-клиенты залипают — попробуйте «Выключено» на одном из инстансов.'),
+    adv, h('label',{class:'inline'},en,'Включён'));
+  return {el, port, sni, name, get:()=>({name:name.value, port:+port.value, sni:sni.value.trim(), mss:mssSel.value==='custom'?String(mssNum.value):mssSel.value, middle_proxy:mm.checked, ad_tag:ad.value.trim(), mask_host:mh.value.trim(), mask_port:+mp.value||443, enabled:en.checked})};
+}
+async function instanceDialog(){
+  if(!presets.length) presets = await api('GET','/api/presets');
+  const f = formFields(null);
+  const layer = h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
+    h('div',{class:'dialog',role:'dialog'}, h('h2',{},'Новый инстанс'),
+      h('p',{class:'sub'},'Примеры — нажмите, чтобы подставить. Можно ввести любые свои порт и домен.'),
+      ...presets.map(p=>h('button',{class:'preset',onclick:()=>{f.port.value=p.port;f.sni.value=p.sni;}}, h('b',{},p.port+' · '+p.sni), h('div',{class:'sub'},p.note))),
+      h('div',{style:'height:12px'}), f.el,
+      h('div',{class:'row'}, h('button',{class:'primary',onclick:()=>act(async()=>{await api('POST','/api/instances',f.get());layer.remove();},'Инстанс создан')},'Создать'), h('button',{onclick:()=>{layer.remove();quickDialog();}},'Создать сразу несколько…'), h('button',{onclick:()=>layer.remove()},'Отмена'))));
+  document.body.append(layer);
+}
+function quickDialog(){
+  (async()=>{
+    if(!presets.length) presets = await api('GET','/api/presets');
+    const rows = h('div'); const list=[];
+    const addRow=(port,sni)=>{
+      const pi=h('input',{type:'number',min:1,max:65535,placeholder:'порт',value:port||'',style:'width:110px'});
+      const si=h('input',{placeholder:'домен, например www.cloudflare.com',value:sni||''});
+      const rm=h('button',{class:'danger',title:'Убрать строку',onclick:()=>{ row.remove(); list.splice(list.indexOf(o),1); }},'✕');
+      const row=h('div',{class:'row',style:'margin-bottom:8px;flex-wrap:nowrap'},pi,si,rm); const o={pi,si};
+      list.push(o); rows.append(row);
+    };
+    presets.slice(0,3).forEach(p=>addRow(p.port,p.sni));
+    const go=async()=>{
+      const todo=list.filter(o=>o.pi.value||o.si.value.trim()); const errs=[]; let okN=0;
+      for(const o of todo){ try{ await api('POST','/api/instances',{port:+o.pi.value,sni:o.si.value.trim(),mss:'tspu'}); okN++; }catch(e){ errs.push((o.pi.value||'?')+': '+e.message); } }
+      if(okN) layer.remove(); await refresh();
+      if(errs.length) toast(errs.join(' · '),true); else toast('Создано инстансов: '+okN);
+    };
+    const layer=h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
+      h('div',{class:'dialog',style:'width:min(560px,94vw)',role:'dialog'}, h('h2',{},'Быстрый старт'),
+        h('p',{class:'sub'},'Для каждой строки создаётся инстанс с одним пользователем и client_mss=tspu. Значения ниже — просто пример: меняйте, добавляйте и удаляйте строки.'),
+        rows,
+        h('div',{class:'row',style:'margin:6px 0 14px'}, h('button',{onclick:()=>addRow('','')},'+ Добавить строку'),
+          ...presets.slice(3).map(p=>h('button',{title:p.note,onclick:()=>addRow(p.port,p.sni)},'+ '+p.port+' · '+p.sni))),
+        h('div',{class:'row'}, h('button',{class:'primary',onclick:go},'Создать'), h('button',{onclick:()=>layer.remove()},'Отмена'))));
+    document.body.append(layer);
+  })().catch(e=>toast(e.message,true));
+}
+
+async function systemDialog(){
+  let I; try{ I = await api('GET','/api/system'); }catch(e){ return; }
+  const layer=h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}});
+  const led=(c)=>h('span',{class:'led '+c});
+  const chk=(on,t)=>{ const c=h('input',{type:'checkbox',checked:on}); return {c, el:h('label',{class:'inline'},c,t)}; };
+  const host=h('input',{value:S.settings.public_host,placeholder:S.settings.detected_host||'proxy.example.com'});
+  const sc=chk(I.system.sysctl,'Быстрый TCP keepalive и BBR (лечит залипание iOS после сворачивания Telegram)');
+  const fc=chk(I.system.firewall,'Открывать порты инстансов в файрволе хоста');
+  const rc=chk(I.system.rate_limit,'Ограничение: 1 новое соединение в секунду с одного IP на порт (против зондирования)');
+  const saveSys=()=>act(async()=>{ await api('PUT','/api/system',{sysctl:sc.c.checked,firewall:fc.c.checked,rate_limit:rc.c.checked}); layer.remove(); },'Применено');
+  const fwTxt = !I.system.firewall ? 'Выключено' : I.firewall.error ? I.firewall.error : I.firewall.active ? 'Открыты порты: '+(I.firewall.ports.join(', ')||'—') : 'Ожидает применения';
+  const fwCls = !I.system.firewall ? '' : I.firewall.error ? 'bad' : I.firewall.active ? 'ok' : 'warn';
+  const sysBad = I.sysctl.filter(x=>!x.ok);
+  const sysTxt = !I.system.sysctl ? 'Выключено' : sysBad.length ? 'Не применилось: '+sysBad.map(x=>x.name+' ('+(I.sysctl_errors[x.name]||'текущее '+x.current)+')').join('; ') : 'Применено';
+  const sysCls = !I.system.sysctl ? '' : sysBad.length ? 'bad' : 'ok';
+  const ver=h('span',{},I.telemt.version||'неизвестна'); const latest=h('div',{class:'sub'},'');
+  const updBtn=h('button',{onclick:async()=>{ updBtn.disabled=true; updBtn.textContent='Обновляем…'; try{ const d=await api('POST','/api/system/update'); ver.textContent=d.version; toast('telemt обновлён до '+d.version+', инстансы перезапущены'); await refresh(); }catch(e){ toast(e.message,true);} updBtn.disabled=false; updBtn.textContent='Обновить до последней'; }},'Обновить до последней');
+  const chkBtn=h('button',{onclick:async()=>{ try{ const d=await api('GET','/api/system/latest'); latest.textContent='Последняя версия на GitHub: '+d.latest+(d.latest===I.telemt.version?' — у вас актуальная':''); }catch(e){ toast(e.message,true);} }},'Проверить версию');
+  const o=h('input',{type:'password',autocomplete:'current-password',placeholder:'текущий'}); const n=h('input',{type:'password',autocomplete:'new-password',placeholder:'новый, от 8 символов'});
+  layer.append(h('div',{class:'dialog',style:'width:min(560px,94vw)',role:'dialog'}, h('h2',{},'Система'),
+    h('h3',{style:'font-size:15px;margin:16px 0 8px'},'Адрес в ссылках'),
+    h('label',{},'Домен или IP сервера',host),
+    h('div',{class:'hint'},'Пусто — автоопределённый IP'+(S.settings.detected_host?' ('+S.settings.detected_host+')':'')+'. Сохранение перезапускает все инстансы.'),
+    h('button',{onclick:()=>act(async()=>{await api('PUT','/api/settings',{public_host:host.value});layer.remove();},'Сохранено')},'Сохранить адрес'),
+    h('h3',{style:'font-size:15px;margin:22px 0 8px'},'Сеть и файрвол хоста'),
+    sc.el, h('div',{class:'sub',style:'margin:-6px 0 12px 24px'},led(sysCls),sysTxt),
+    fc.el, h('div',{class:'sub',style:'margin:-6px 0 12px 24px'},led(fwCls),fwTxt),
+    rc.el, I.firewall.rate_error && h('div',{class:'sub',style:'margin:-6px 0 8px 24px;color:var(--warn)'},'Ограничение недоступно: '+I.firewall.rate_error),
+    h('div',{class:'hint',style:'margin-left:24px'},'Если много клиентов сидит за одним IP (операторский NAT), ограничение может мешать — тогда выключите его.'),
+    h('div',{class:'hint'},'Правила живут в отдельной цепочке TELEMT_PANEL и не трогают UFW. Панель проверяет их каждые 30 секунд. Порты также нужно открыть в облачном файрволе хостера, если он есть.'),
+    h('button',{class:'primary',onclick:saveSys},'Применить'),
+    h('h3',{style:'font-size:15px;margin:22px 0 8px'},'telemt'),
+    h('div',{},'Установлена версия: ',ver,I.telemt.custom?' (обновлена из панели)':' (из образа)'), latest,
+    h('div',{class:'row',style:'margin-top:8px'},chkBtn,updBtn),
+    h('h3',{style:'font-size:15px;margin:22px 0 8px'},'Пароль панели'),
+    I.password_from_env ? h('div',{class:'hint'},'Пароль задан переменной PANEL_PASSWORD в .env. Измените его там и перезапустите контейнер.') :
+      h('div',{}, h('div',{class:'row',style:'flex-wrap:nowrap'},o,n), h('button',{style:'margin-top:8px',onclick:()=>act(async()=>{await api('PUT','/api/password',{old:o.value,new:n.value});o.value=n.value='';},'Пароль изменён')},'Сменить пароль')),
+    h('div',{class:'row',style:'margin-top:22px;justify-content:flex-end'},h('button',{onclick:()=>layer.remove()},'Закрыть'))));
+  document.body.append(layer);
+}
+
+async function refresh(){
+  try{ S = await api('GET','/api/state'); if (!document.getElementById('drawer-layer') || tab!=='cfg') render(); }catch(e){ if(e.message!=='login') console.error(e); }
+}
+async function start(){
+  await refresh(); clearInterval(poll);
+  poll = setInterval(()=>{ if (!document.querySelector('.dialog') && tab!=='cfg' && tab!=='diag') refresh(); }, 4000);
+}
+api('GET','/api/state').then(()=>start()).catch(()=>{});
+</script>
+</body>
+</html>

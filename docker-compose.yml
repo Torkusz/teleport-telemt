@@ -1,0 +1,33 @@
+services:
+  telemt-panel:
+    build:
+      context: .
+      args:
+        TELEMT_VERSION: latest        # обновлять telemt можно и из панели (Система → telemt)
+    container_name: telemt-panel
+    restart: unless-stopped
+    # host-сеть: порты инстансов добавляются из панели без пересоздания контейнера,
+    # telemt видит реальные IP клиентов, а правила файрвола применяются к хосту.
+    network_mode: host
+    environment:
+      PANEL_PASSWORD: "${PANEL_PASSWORD:-}"   # пусто = сгенерировать и показать в логах (потом меняется в панели)
+      PANEL_BIND: "${PANEL_BIND:-127.0.0.1}"  # 0.0.0.0 — открыть наружу (не рекомендуется)
+      PANEL_PORT: "${PANEL_PORT:-8080}"
+    volumes:
+      - ./data:/data
+      # sysctl хоста: Docker монтирует /proc/sys только на чтение, поэтому нужные файлы пробрасываем отдельно
+      - /proc/sys/net/ipv4/tcp_keepalive_time:/hostsys/ipv4/tcp_keepalive_time
+      - /proc/sys/net/ipv4/tcp_keepalive_intvl:/hostsys/ipv4/tcp_keepalive_intvl
+      - /proc/sys/net/ipv4/tcp_keepalive_probes:/hostsys/ipv4/tcp_keepalive_probes
+      - /proc/sys/net/ipv4/tcp_congestion_control:/hostsys/ipv4/tcp_congestion_control
+      - /proc/sys/net/core/default_qdisc:/hostsys/core/default_qdisc
+    cap_drop: [ALL]
+    cap_add:
+      - NET_BIND_SERVICE   # порты < 1024 (443)
+      - NET_ADMIN          # iptables и sysctl хоста
+      - NET_RAW            # iptables
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp", "/run/telemt"]
+    ulimits:
+      nofile: {soft: 65536, hard: 65536}
