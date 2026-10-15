@@ -110,14 +110,14 @@ create_user() {
 }
 
 ask_instances() {
-  echo
-  echo -e "${CYAN}Сколько инстансов создать?${NC} (рекомендуется 3–8, максимум $MAX_INSTANCES)"
+  echo >&2
+  echo -e "${CYAN}Сколько инстансов создать?${NC} (рекомендуется 3–8, максимум $MAX_INSTANCES)" >&2
   read -rp "Количество [3]: " num
   num=${num:-3}
   if ! [[ "$num" =~ ^[0-9]+$ ]] || (( num < 1 || num > MAX_INSTANCES )); then
     error "Введите число от 1 до $MAX_INSTANCES"
   fi
-  echo "$num"
+  echo "$num"   # только число уходит в stdout
 }
 
 create_configs() {
@@ -290,6 +290,7 @@ do_install() {
 
   create_user
   install_telemt_binary
+  mkdir -p "$INSTALL_DIR"
 
   local count
   count=$(ask_instances)
