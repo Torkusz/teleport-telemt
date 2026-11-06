@@ -1,6 +1,6 @@
 # telemt-panel
 
-Веб-панель для MTProto-прокси [telemt](https://github.com/telemt/telemt): несколько инстансов (порт + маскировочный домен),
+Веб-панель для MTProto-прокси [telemt](https://github.com/telemt/telemt): несколько инстансов (порт + маскировочный домен **или WEB-режим**),
 пользователи и ссылки, статистика, диагностика, логи. Всё в одном Docker-контейнере.
 
 ## Запуск
@@ -18,26 +18,110 @@ ssh -L 8080:127.0.0.1:8080 user@SERVER      # затем откройте http:/
 ```
 
 В панели нажмите **«Быстрый старт»**: откроется список портов и доменов. Это только пример — меняйте значения,
-добавляйте и удаляйте строки. Один инстанс можно создать вручную с любым портом и SNI.
-Ссылки лежат в карточке инстанса — копируйте и раздавайте клиентам.
+добавляйте и удаляйте строки. Один инстанс можно создать вручную с любым портом и SNI **или в режиме WEB**.
+
+## WEB-прокси (tg://webproxy) — новое
+
+С августа 2026 в Telegram появился транспорт **WEB Proxy**: MTProto-поток упаковывается в обычный HTTPS/WebSocket
+к вашему домену на порту 443. Для DPI это выглядит как заход на сайт.
+
+Telemt (с версии **≥ 3.5.5**) реализует WEB-режим нативно. Панель умеет создавать такие инстансы.
+
+### Как включить в панели
+
+1. **Система → Адрес в ссылках** — укажите ваш FQDN (обязательно для WEB).
+2. Создайте инстанс → **Транспорт: WEB (tg://webproxy)**.
+3. По желанию задайте `base_path` (например `tg` или `telegram/web`) — тогда прокси живёт только под этим путём, остальной сайт может быть обычным.
+4. Сохраните. Telemt начнёт слушать `127.0.0.1:18080+id`.
+5. Настройте **nginx / Caddy / HAProxy** на 443 с TLS и `proxy_pass` на этот loopback-порт (см. ниже).
+6. Раздайте ссылки вида `tg://webproxy?server=ваш.домен&secret=dd…` (или с path).
+
+Клиенты: **Telegram Desktop 7.1+**, свежие Android; iOS — по мере обновлений. Звонки через WEB пока не работают.
+
+### Минимальный nginx для WEB-инстанса
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      "";
+}
+
+upstream telemt_web_1 {
+    server 127.0.0.1:18081;   # = WEB_LISTEN_BASE + id инстанса
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name proxy.example.com;
+    ssl_certificate     /etc/letsencrypt/live/proxy.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/proxy.example.com/privkey.pem;
+
+    # Carrier-пакеты до 2 MiB
+    client_max_body_size 4m;
+
+    # Весь vhost (base_path пустой) — или только location ^~ /telegram/web/
+    location / {
+        proxy_pass http://telemt_web_1;   # без URI — path уходит как есть
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;  # ровно один адрес
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        access_log off;
+    }
+}
+```
+
+Если `base_path = "telegram/web"`, замените `location /` на `location ^~ /telegram/web/` (и точный `location = /telegram/web` на decoy/сайт).
+
+Подробности протокола и edge-cases: [документация telemt WEB](https://github.com/telemt/telemt/blob/main/docs/WEB/WEB_PROXY.ru.md),
+статьи: [Habr — тестируем WEB-proxy](https://habr.com/ru/companies/domclick/articles/1092986/),
+[Код.ру — как устроен tproxy](https://kod.ru/telegram-web-proxy-tproxy-server-podrobnosti).
+
+> Официальный proof-of-concept от команды Desktop: [telegramdesktop/tproxy-server](https://github.com/telegramdesktop/tproxy-server).
+> Telemt — полноценная production-реализация того же контракта.
+
+## Рекомендации по обходам (ноябрь 2026)
+
+| Приоритет | Что использовать | Когда |
+|-----------|------------------|--------|
+| **1** | **WEB (tg://webproxy)** на своём домене + реальный decoy-сайт | Агрессивный DPI, блокировки MTProto/FakeTLS |
+| **2** | **FakeTLS (ee)** + хороший SNI (CDN/Apple/Microsoft) + mask на свой сайт | Клиенты без WEB, запасной канал |
+| **3** | Несколько портов (443, 5223, 8443…) с разными SNI | Один порт/домен «потушили» |
+| **4** | Публичные списки прокси | Только как временный fallback — их быстро режут |
+
+Практические советы:
+
+- **Свой сервер + свой домен** надёжнее любых бесплатных списков.
+- Для WEB: домен должен резолвиться в IP сервера, сертификат валидный, на 443 отвечает «нормальный» сайт (decoy), если capability неверный.
+- Не ставьте лишний прокси *перед* WEB-endpoint без необходимости (Host/capability должны совпадать).
+- В панели включите sysctl (keepalive + BBR) и rate-limit SYN — это уже есть в «Система».
+- Обновляйте telemt из панели (Система → telemt) — WEB и исправления DPI появляются в релизах.
+- Звонки: только через SOCKS5/VPN; MTProxy/WEB их не несут.
 
 ## Всё управление — в панели
 
 Кнопка **«Система»**:
 
-- **Адрес в ссылках** — домен или IP.
+- **Адрес в ссылках** — домен или IP (обязателен для WEB).
 - **Сеть и файрвол хоста** — быстрый keepalive и BBR; открытие портов инстансов; лимит 1 SYN/сек на IP.
   Правила живут в отдельной цепочке `TELEMT_PANEL` (UFW не трогается), панель сверяет их каждые 30 секунд.
 - **telemt** — версия, проверка и обновление до последней одной кнопкой.
 - **Пароль панели** — смена без перезапуска.
 
 Если у хостера есть облачный файрвол, порты нужно открыть и в нём — панель до него не дотянется.
+Для WEB достаточно открыть 80/443 (для ACME и HTTPS).
 
 ## Что внутри
 
 - `network_mode: host` — чтобы порты добавлялись из панели без пересоздания контейнера, а UFW-правила действовали
   (опубликованные порты Docker обходят UFW).
-- Панель — источник истины: пишет `telemt.toml` атомарно. Пользователи подхватываются telemt на лету, смена порта/SNI/MSS — рестарт.
+- Панель — источник истины: пишет `telemt.toml` атомарно. Пользователи подхватываются telemt на лету, смена порта/SNI/MSS/transport — рестарт.
 - Control API каждого инстанса — только `127.0.0.1` + случайный `auth_header`.
 - Контейнер: `cap_drop: ALL` + `NET_BIND_SERVICE`, `NET_ADMIN`, `NET_RAW` (для iptables/sysctl хоста), read-only rootfs.
 - Данные — в `./data` (state.json, конфиги, кэш TLS-эмуляции). Бэкап = копия этой папки.

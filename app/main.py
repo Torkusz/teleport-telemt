@@ -33,11 +33,12 @@ TELEMT_BIN = os.getenv("TELEMT_BIN", "telemt")
 PANEL_BIND = os.getenv("PANEL_BIND", "127.0.0.1")
 PANEL_PORT = int(os.getenv("PANEL_PORT", "8080"))
 API_PORT_BASE = 19100  # Control API инстансов: 127.0.0.1:19100+id
+WEB_LISTEN_BASE = 18080  # WEB-listener telemt на 127.0.0.1:18080+id (нужен nginx/Caddy снаружи)
 STATIC = Path(__file__).parent / "static"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 PRESETS = [
-    {"port": 443, "sni": "www.cloudflare.com", "note": "Обычный HTTPS к CDN. Самый «серый» вариант."},
+    {"port": 443, "sni": "www.cloudflare.com", "note": "Обычный HTTPS к CDN. Самый «серый» вариант (FakeTLS)."},
     {"port": 5223, "sni": "www.apple.com", "note": "Порт Apple Push (APNs): у каждого iPhone постоянное соединение."},
     {"port": 8530, "sni": "www.microsoft.com", "note": "Порт WSUS (обновления Windows)."},
     {"port": 2053, "sni": "www.cloudflare.com", "note": "Альтернативный HTTPS-порт Cloudflare."},
@@ -91,12 +92,75 @@ def link_host():
     return store.d["settings"]["public_host"] or detected_host["value"]
 
 
+def web_listen_port(i):
+    return WEB_LISTEN_BASE + int(i["id"])
+
+
 def render_toml(i):
     q = json.dumps
+    transport = i.get("transport") or "tls"
     mm = bool(i["middle_proxy"] or i["ad_tag"])
     out = ["[general]", "fast_mode = true", f"use_middle_proxy = {str(mm).lower()}", 'log_level = "normal"']
     if i["ad_tag"]:
         out.append(f"ad_tag = {q(i['ad_tag'])}")
+
+    if transport == "web":
+        # WEB-режим: FakeTLS/ee не используется. Нужен nginx/Caddy на 443 → 127.0.0.1:web_port
+        host = link_host() or "proxy.example.com"
+        base = (i.get("web_base_path") or "").strip().strip("/")
+        decoy = (i.get("web_decoy_upstream") or "http://127.0.0.1:18081").strip()
+        out += [
+            "", "[general.modes]", "classic = false", "secure = true", "tls = false",
+            "", "[general.links]", 'show = "*"',
+            f"public_host = {q(host)}",
+            "", "[network]", "ipv4 = true", "ipv6 = false", "prefer = 4",
+            "", "[server]", f"port = {web_listen_port(i)}",
+            "", "[server.api]", "enabled = true", f'listen = "127.0.0.1:{API_PORT_BASE + i["id"]}"',
+            'whitelist = ["127.0.0.1/32"]', f"auth_header = {q(i['api_token'])}", "minimal_runtime_enabled = false",
+            "", "[[server.listeners]]",
+            'ip = "127.0.0.1"',
+            f"port = {web_listen_port(i)}",
+            'transport = "web"',
+            "proxy_protocol = false",
+            'web_client_ip_source = "x_forwarded_for"',
+            'web_trusted_proxy_cidrs = ["127.0.0.1/32", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]',
+            "", "[web]",
+            "enabled = true",
+            'carrier = "https-lanes"',
+            'decoy_fasttrack_mode = "off"',
+            'http_connection_capacity_action = "drop"',
+            "", "[[web.vhosts]]",
+            f"host = {q(host)}",
+        ]
+        if base:
+            out.append(f"base_path = {q(base)}")
+        # public_addr: IP:443 — telemt использует для internal route; оператор должен указать реальный
+        pub = store.d["settings"].get("public_addr") or ""
+        if pub:
+            out.append(f"public_addr = {q(pub)}")
+        out += [
+            "", "[web.vhosts.decoy]",
+            'mode = "http_upstream"',
+            f"upstream = {q(decoy)}",
+        ]
+        # профили по пользователям
+        for u in i["users"]:
+            if u.get("enabled", True):
+                out += [
+                    "", "[[web.vhosts.profiles]]",
+                    f"user = {q(u['name'])}",
+                    'secret_mode = "dd"',
+                    "max_sessions = 16",
+                    "max_streams = 1024",
+                    "max_streams_per_session = 64",
+                ]
+        out += ["", "[access]", "replay_check_len = 65536", "ignore_time_skew = false", "", "[access.users]"]
+        for u in i["users"]:
+            if u.get("enabled", True):
+                out.append(f"{q(u['name'])} = {q(u['secret'])}")
+        return "\n".join(out) + "\n"
+
+    # --- классический FakeTLS (ee) ---
     out += ["", "[general.modes]", "classic = false", "secure = false", "tls = true", "", "[general.links]", 'show = "*"']
     if link_host():
         out.append(f"public_host = {q(link_host())}")
@@ -364,7 +428,17 @@ def host_reconcile_sync():
     sysd = store.d["system"]
     if sysd["sysctl"]:
         sysctl_apply()
-    ports = [i["port"] for i in store.d["instances"] if i["enabled"]]
+    ports = []
+    has_web = False
+    for i in store.d["instances"]:
+        if not i.get("enabled"):
+            continue
+        if (i.get("transport") or "tls") == "web":
+            has_web = True
+            continue
+        ports.append(i["port"])
+    if has_web and 443 not in ports:
+        ports.append(443)
     fw_reconcile(sysd["firewall"], ports, sysd["rate_limit"])
 
 
@@ -398,27 +472,47 @@ async def tapi(i, path):
 
 def local_link(i, u):
     host = link_host() or "SERVER_IP"
+    transport = i.get("transport") or "tls"
+    if transport == "web":
+        # tg://webproxy — порт всегда 443, secret = dd + 16 байт (hex)
+        base = (i.get("web_base_path") or "").strip().strip("/")
+        server = f"{host}/{base}" if base else host
+        # path-vhost: server percent-encoded в ссылке; панель отдаёт читаемый вид
+        return f"tg://webproxy?server={server}&secret=dd{u['secret']}"
     return f"tg://proxy?server={host}&port={i['port']}&secret=ee{u['secret']}{i['sni'].encode().hex()}"
 
 
 def public_view(i, users_api, summary, health):
     r = ensure_runner(i["id"])
     api_users = {u["username"]: u for u in (users_api or {}).get("data", [])}
+    transport = i.get("transport") or "tls"
     users = []
     for u in i["users"]:
         a = api_users.get(u["name"], {})
-        links = [l for l in (a.get("links") or {}).get("tls", []) if "server=::" not in l]
+        link_key = "web" if transport == "web" else "tls"
+        links = [l for l in (a.get("links") or {}).get(link_key, []) if "server=::" not in l]
+        if not links and transport == "web":
+            # fallback: telemt может отдавать web-ссылки в другом ключе
+            links = [l for l in (a.get("links") or {}).get("tls", []) if "webproxy" in l]
         link = links[0] if links else local_link(i, u)
+        if transport == "web":
+            tme = link.replace("tg://webproxy", "https://t.me/webproxy", 1)
+        else:
+            tme = link.replace("tg://proxy", "https://t.me/proxy", 1)
         users.append({
             "name": u["name"], "secret": u["secret"], "enabled": u.get("enabled", True),
-            "link": link, "web_link": link.replace("tg://proxy", "https://t.me/proxy", 1),
+            "link": link, "web_link": tme,
             "link_from_api": bool(links),
             "connections": a.get("current_connections", 0), "ips": a.get("active_unique_ips", 0),
             "octets": a.get("total_octets", 0),
         })
     s = (summary or {}).get("data") or {}
     return {
-        **{k: i[k] for k in ("id", "name", "port", "sni", "mss", "middle_proxy", "ad_tag", "mask_host", "mask_port", "enabled")},
+        **{k: i.get(k) for k in (
+            "id", "name", "port", "sni", "mss", "middle_proxy", "ad_tag",
+            "mask_host", "mask_port", "enabled", "transport", "web_base_path", "web_decoy_upstream"
+        )},
+        "web_listen_port": web_listen_port(i) if transport == "web" else None,
         "status": {"running": r.running, "api": bool(health), "restarts": r.restarts,
                    "uptime": int(time.time() - r.started) if r.running else 0},
         "stats": {"connections_total": s.get("connections_total", 0), "bad_total": s.get("connections_bad_total", 0),
@@ -534,14 +628,17 @@ def logout(response: Response):
 
 class InstIn(BaseModel):
     name: str = ""
-    port: int
-    sni: str
+    port: int = 443
+    sni: str = "www.cloudflare.com"
     mss: str = "tspu"
     middle_proxy: bool = False
     ad_tag: str = ""
     mask_host: str = ""
     mask_port: int = 443
     enabled: bool = True
+    transport: str = "tls"          # "tls" | "web"
+    web_base_path: str = ""         # например "tg" или "telegram/web"
+    web_decoy_upstream: str = "http://127.0.0.1:18081"
 
 
 def port_free(port):
@@ -556,14 +653,42 @@ def port_free(port):
 
 
 def validate(body: InstIn, current=None):
+    transport = (body.transport or "tls").lower()
+    if transport not in ("tls", "web"):
+        raise HTTPException(400, "transport: tls или web")
+    body.transport = transport
+
+    if transport == "web":
+        # публичный порт всегда 443 (nginx), telemt слушает loopback — проверяем только private port
+        if not link_host():
+            raise HTTPException(400, "Для WEB-режима задайте «Адрес в ссылках» (домен) в Системе")
+        base = (body.web_base_path or "").strip().strip("/")
+        if base and not re.match(r"^[A-Za-z0-9][A-Za-z0-9_/-]{0,126}[A-Za-z0-9]$", base):
+            raise HTTPException(400, "web_base_path: сегменты [A-Za-z0-9_-], без ведущего/завершающего /")
+        # private port не пересекается с панелью и другими WEB
+        wport = WEB_LISTEN_BASE + (current["id"] if current else store.d["next_id"])
+        if wport == PANEL_PORT:
+            raise HTTPException(400, "Внутренний WEB-порт совпал с панелью")
+        for o in store.d["instances"]:
+            if (o.get("transport") or "tls") != "web":
+                continue
+            if current and o["id"] == current["id"]:
+                continue
+            if WEB_LISTEN_BASE + o["id"] == wport:
+                raise HTTPException(400, "Конфликт внутренних WEB-портов")
+        # port в UI для web — информационный (443)
+        body.port = 443
+        return
+
     if not 1 <= body.port <= 65535:
         raise HTTPException(400, "Порт должен быть от 1 до 65535")
     if body.port == PANEL_PORT:
         raise HTTPException(400, "Этот порт занят самой панелью")
     for o in store.d["instances"]:
+        if (o.get("transport") or "tls") == "web":
+            continue
         if o["port"] == body.port and (current is None or o["id"] != current["id"]):
             raise HTTPException(400, f"Порт {body.port} уже используется инстансом «{o['name']}»")
-    # порт проверяем при создании, смене порта и включении: если инстанс сейчас работает на этом порту, он сам его держит
     own_running = current is not None and current["port"] == body.port and ensure_runner(current["id"]).running
     if body.enabled and not own_running:
         if not port_free(body.port):
@@ -600,7 +725,8 @@ async def create_instance(body: InstIn):
     async with store.lock:
         iid = store.d["next_id"]
         store.d["next_id"] += 1
-        inst = {**body.model_dump(), "id": iid, "name": body.name.strip()[:40] or f"{body.sni}:{body.port}",
+        default_name = f"web:{link_host()}" if body.transport == "web" else f"{body.sni}:{body.port}"
+        inst = {**body.model_dump(), "id": iid, "name": body.name.strip()[:40] or default_name,
                 "api_token": secrets.token_hex(16),
                 "users": [{"name": "user1", "secret": secrets.token_hex(16), "enabled": True}]}
         store.d["instances"].append(inst)

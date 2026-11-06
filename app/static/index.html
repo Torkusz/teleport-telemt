@@ -146,16 +146,17 @@ function render(){
     for (const i of S.instances){
       const [cls,txt] = ledOf(i);
       const conns = i.users.reduce((a,u)=>a+u.connections,0);
+      const isWeb = (i.transport||'tls')==='web';
       tbody.append(h('tr',{tabindex:0,onclick:()=>openInstance(i.id),onkeydown:e=>{if(e.key==='Enter')openInstance(i.id)}},
         h('td',{}, h('span',{class:'led '+cls}), txt),
-        h('td',{}, h('div',{class:'port'},i.port), h('div',{class:'sub'},i.name)),
-        h('td',{class:'hide-s'}, i.sni, h('div',{class:'sub'}, 'MSS: '+(i.mss||'авто'))),
+        h('td',{}, h('div',{class:'port'}, isWeb ? '443 WEB' : i.port), h('div',{class:'sub'},i.name)),
+        h('td',{class:'hide-s'}, isWeb ? (i.web_base_path ? '/'+i.web_base_path : 'весь vhost') : i.sni, h('div',{class:'sub'}, isWeb ? 'loopback:'+(i.web_listen_port||'?') : ('MSS: '+(i.mss||'авто')))),
         h('td',{class:'num'},conns),
         h('td',{class:'num hide-s'},i.stats.connections_total),
         h('td',{class:'num hide-s',style:i.stats.bad_total?'color:var(--warn)':''},i.stats.bad_total)));
     }
     main.append(h('div',{class:'panelbox'}, h('table',{},
-      h('thead',{}, h('tr',{}, h('th',{},'Состояние'),h('th',{},'Порт'),h('th',{class:'hide-s'},'Маска (SNI)'),h('th',{class:'num'},'Онлайн'),h('th',{class:'num hide-s'},'Всего'),h('th',{class:'num hide-s'},'Отбраковано'))),
+      h('thead',{}, h('tr',{}, h('th',{},'Состояние'),h('th',{},'Порт / тип'),h('th',{class:'hide-s'},'Маска / path'),h('th',{class:'num'},'Онлайн'),h('th',{class:'num hide-s'},'Всего'),h('th',{class:'num hide-s'},'Отбраковано'))),
       tbody)));
     main.append(h('p',{class:'sub'},'Порты, лимит соединений, keepalive и BBR настраиваются в разделе «Система».'));
   }
@@ -188,14 +189,21 @@ function drawDrawer(){
   document.body.append(layer);
 }
 function usersTab(body,i){
+  const isWeb = (i.transport||'tls') === 'web';
+  if (isWeb) {
+    body.append(h('div',{class:'hint',style:'margin-bottom:12px;padding:10px;background:var(--soft);border-radius:8px'},
+      h('b',{},'WEB-режим (tg://webproxy). '),
+      `Telemt слушает 127.0.0.1:${i.web_listen_port}. Снаружи нужен nginx/Caddy на 443 с TLS и proxy_pass на этот порт. `,
+      'Клиенты: Telegram Desktop 7.1+, свежий Android. Звонки через WEB пока не работают.'));
+  }
   for (const u of i.users){
     body.append(h('div',{class:'user'},
       h('div',{class:'row'}, h('span',{class:'name',style:'flex:1'},u.name), h('span',{class:'sub'},`онлайн ${u.connections} · IP ${u.ips} · ${fmtB(u.octets)}`)),
       h('div',{class:'link'},u.link),
       !u.link_from_api && h('div',{class:'hint',style:'margin:0 0 8px'},'Ссылка собрана панелью (telemt ещё не ответил). Если не работает — подождите минуту.'),
       h('div',{class:'row'},
-        h('button',{class:'primary',onclick:()=>copy(u.link)},'Копировать tg://'),
-        h('button',{onclick:()=>copy(u.web_link)},'Копировать t.me'),
+        h('button',{class:'primary',onclick:()=>copy(u.link)}, isWeb ? 'Копировать tg://webproxy' : 'Копировать tg://'),
+        h('button',{onclick:()=>copy(u.web_link)}, isWeb ? 'Копировать t.me/webproxy' : 'Копировать t.me'),
         h('button',{onclick:()=>confirm('Выпустить новый секрет? Старая ссылка перестанет работать.')&&act(()=>api('POST',`/api/instances/${i.id}/users/${encodeURIComponent(u.name)}/rotate`),'Секрет обновлён')},'Новый секрет'),
         h('button',{class:'danger',onclick:()=>confirm('Удалить пользователя '+u.name+'?')&&act(()=>api('DELETE',`/api/instances/${i.id}/users/${encodeURIComponent(u.name)}`),'Удалён')},'Удалить'))));
   }
@@ -227,28 +235,46 @@ function cfgTab(body,i){
 
 /* ---------- формы ---------- */
 function formFields(i){
-  const v = i||{port:'',sni:'',mss:'tspu',middle_proxy:false,ad_tag:'',mask_host:'',mask_port:443,enabled:true,name:''};
+  const v = i||{port:'',sni:'',mss:'tspu',middle_proxy:false,ad_tag:'',mask_host:'',mask_port:443,enabled:true,name:'',transport:'tls',web_base_path:'',web_decoy_upstream:'http://127.0.0.1:18081'};
   const name=h('input',{value:v.name,placeholder:'необязательно',maxlength:40});
-  const port=h('input',{type:'number',min:1,max:65535,value:v.port});
+  const transport=h('select',{}, h('option',{value:'tls'},'FakeTLS (ee) — классика'), h('option',{value:'web'},'WEB (tg://webproxy) — HTTPS/WebSocket'));
+  transport.value = v.transport || 'tls';
+  const port=h('input',{type:'number',min:1,max:65535,value:v.port||443});
   const sni=h('input',{value:v.sni,placeholder:'www.cloudflare.com'});
+  const basePath=h('input',{value:v.web_base_path||'',placeholder:'пусто = весь домен, или tg / telegram/web'});
+  const decoy=h('input',{value:v.web_decoy_upstream||'http://127.0.0.1:18081',placeholder:'http://127.0.0.1:18081'});
   const mssSel=h('select',{}, h('option',{value:'tspu'},'tspu (MSS 92) — рекомендуется для РФ'), h('option',{value:''},'Выключено'), h('option',{value:'custom'},'Своё значение'));
   const mssNum=h('input',{type:'number',min:40,max:1460,placeholder:'например 88'});
   if (v.mss==='tspu') mssSel.value='tspu'; else if (v.mss==='') mssSel.value=''; else { mssSel.value='custom'; mssNum.value=v.mss; }
   const mssWrap=h('div'); const syncM=()=>{mssNum.style.display=mssSel.value==='custom'?'':'none'}; mssSel.addEventListener('change',syncM); syncM();
   const mm=h('input',{type:'checkbox',checked:v.middle_proxy}); const ad=h('input',{value:v.ad_tag,placeholder:'32 hex от @MTProxybot'});
   const mh=h('input',{value:v.mask_host,placeholder:'пусто = SNI-домен'}); const mp=h('input',{type:'number',value:v.mask_port});
-  const adv=h('details',{}, h('summary',{style:'cursor:pointer;color:var(--muted);margin-bottom:10px'},'Дополнительно'),
+  const adv=h('details',{}, h('summary',{style:'cursor:pointer;color:var(--muted);margin-bottom:10px'},'Дополнительно (FakeTLS)'),
     h('label',{class:'inline'},mm,'Использовать middle-proxy'),
     h('label',{},'ad_tag (спонсорский канал; включает middle-proxy)',ad),
     h('label',{},'mask_host — куда пересылать «чужие» соединения (например, свой сайт)',mh),
     h('label',{},'mask_port',mp));
+  const webAdv=h('details',{}, h('summary',{style:'cursor:pointer;color:var(--muted);margin-bottom:10px'},'Параметры WEB'),
+    h('label',{},'base_path (путь на сайте, без ведущего /)',basePath),
+    h('label',{},'decoy upstream (обычный сайт для «чужих» запросов)',decoy),
+    h('p',{class:'hint'},'После сохранения настройте nginx: location → proxy_pass http://127.0.0.1:&lt;web_listen_port&gt;. См. README.'));
   const en=h('input',{type:'checkbox',checked:v.enabled});
-  const el=h('div',{}, h('label',{},'Название',name), h('label',{},'Порт',port), h('label',{},'Маскировочный домен (SNI)',sni),
+  const tlsFields=h('div',{}, h('label',{},'Порт',port), h('label',{},'Маскировочный домен (SNI)',sni));
+  const webFields=h('div',{}, h('p',{class:'hint'},'Публичный порт всегда 443 (TLS терминирует nginx/Caddy). В «Системе» должен быть задан домен.'));
+  const syncT=()=>{ const w=transport.value==='web'; tlsFields.style.display=w?'none':''; webFields.style.display=w?'':'none'; adv.style.display=w?'none':''; webAdv.style.display=w?'':'none'; };
+  transport.addEventListener('change',syncT); syncT();
+  const el=h('div',{}, h('label',{},'Название',name), h('label',{},'Транспорт',transport), tlsFields, webFields, webAdv,
     h('div',{class:'hint'},'Берите крупные сайты, к которым ходит весь интернет. Telemt подтянет их настоящий сертификат.'),
     h('label',{},'Фрагментация ClientHello (client_mss)',mssSel,mssNum),
     h('div',{class:'hint'},'Против JA4-детекта на ТСПУ. Если iOS-клиенты залипают — попробуйте «Выключено» на одном из инстансов.'),
     adv, h('label',{class:'inline'},en,'Включён'));
-  return {el, port, sni, name, get:()=>({name:name.value, port:+port.value, sni:sni.value.trim(), mss:mssSel.value==='custom'?String(mssNum.value):mssSel.value, middle_proxy:mm.checked, ad_tag:ad.value.trim(), mask_host:mh.value.trim(), mask_port:+mp.value||443, enabled:en.checked})};
+  return {el, port, sni, name, get:()=>({
+    name:name.value, port:+port.value||443, sni:sni.value.trim()||'www.cloudflare.com',
+    mss:mssSel.value==='custom'?String(mssNum.value):mssSel.value,
+    middle_proxy:mm.checked, ad_tag:ad.value.trim(), mask_host:mh.value.trim(), mask_port:+mp.value||443,
+    enabled:en.checked, transport:transport.value,
+    web_base_path:basePath.value.trim(), web_decoy_upstream:decoy.value.trim()||'http://127.0.0.1:18081'
+  })};
 }
 async function instanceDialog(){
   if(!presets.length) presets = await api('GET','/api/presets');
