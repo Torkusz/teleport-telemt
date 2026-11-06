@@ -129,3 +129,25 @@ server {
 ## Обновление
 
 telemt — из панели (Система → telemt). Саму панель: `git pull && docker compose up -d --build`.
+
+## Caddy и сайт из панели
+
+Панель сама:
+
+1. Генерирует `data/caddy/Caddyfile` под ваши WEB-инстансы.
+2. Держит decoy-сайты в `data/sites/` (загрузка HTML/ZIP в **Система → Сайты**).
+3. Поднимает локальные static-серверы для decoy (telemt ходит на них за «чужими» запросами).
+
+На хосте один раз установите [Caddy](https://caddyserver.com/docs/install) и запускайте:
+
+```bash
+caddy run --config ./data/caddy/Caddyfile
+```
+
+После создания/изменения WEB в панели нажмите **Система → Caddy → Reload**, либо:
+
+```bash
+caddy reload --config ./data/caddy/Caddyfile
+```
+
+Укажите **домен** и **email** (для Let’s Encrypt) в Системе. Кнопка **WEB-прокси** создаёт инстанс в один шаг.

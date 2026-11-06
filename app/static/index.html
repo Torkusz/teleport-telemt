@@ -2,76 +2,196 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>telemt panel</title>
 <style>
 :root{
-  --bg:#e9eeed; --surface:#fff; --ink:#15222b; --muted:#566a73; --line:#c9d4d2;
-  --accent:#0d6666; --accent-ink:#fff; --ok:#1e7a46; --warn:#a85200; --bad:#b3261e; --soft:#f3f6f5;
-  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --bg0:#0b1220; --bg1:#132038; --glass:rgba(255,255,255,.08); --glass2:rgba(255,255,255,.12);
+  --stroke:rgba(255,255,255,.14); --stroke2:rgba(255,255,255,.22);
+  --ink:#f4f7fb; --muted:rgba(244,247,251,.62); --soft:rgba(255,255,255,.06);
+  --accent:#5eead4; --accent2:#38bdf8; --ok:#34d399; --warn:#fbbf24; --bad:#fb7185;
+  --shadow:0 20px 50px rgba(0,0,0,.35); --r:18px; --r2:12px;
+  --sans:ui-rounded,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --blur:blur(22px) saturate(1.35);
 }
-@media (prefers-color-scheme:dark){
-  :root{--bg:#0f1719; --surface:#172326; --ink:#e3ecea; --muted:#8fa5a9; --line:#2a3b3f; --accent:#3fb6b0; --accent-ink:#06201f; --ok:#5cc88a; --warn:#e8a04a; --bad:#ef7d74; --soft:#1c2c30}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg0:#dbe7f3; --bg1:#c5d8ef; --glass:rgba(255,255,255,.55); --glass2:rgba(255,255,255,.72);
+    --stroke:rgba(15,30,50,.12); --stroke2:rgba(15,30,50,.2);
+    --ink:#0f1b2d; --muted:rgba(15,27,45,.58); --soft:rgba(255,255,255,.45);
+    --accent:#0d9488; --accent2:#0284c7; --ok:#059669; --warn:#d97706; --bad:#e11d48;
+    --shadow:0 18px 40px rgba(30,60,90,.12);
+  }
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 var(--sans)}
-button,input,select{font:inherit;color:inherit}
-button{cursor:pointer;border:1px solid var(--line);background:var(--surface);padding:7px 12px;border-radius:6px}
-button:hover{border-color:var(--accent)}
-button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
-button.danger{color:var(--bad)}
-button:focus-visible,input:focus-visible,select:focus-visible,tr[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-input,select{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:7px 9px;width:100%}
-label{display:block;margin:0 0 12px;color:var(--muted);font-size:13px}
-label input,label select{margin-top:4px;color:var(--ink);font-size:15px}
-label.inline{display:flex;gap:8px;align-items:center}
-label.inline input{width:auto;margin:0}
-.hint{color:var(--muted);font-size:13px;margin:-6px 0 12px}
-header{display:flex;align-items:center;gap:12px;padding:14px 24px;background:var(--surface);border-bottom:1px solid var(--line)}
-header h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
-header .host{font-family:var(--mono);font-size:13px;color:var(--muted);background:var(--soft);padding:3px 8px;border-radius:5px}
-header .sp{flex:1}
-main{max-width:1100px;margin:24px auto;padding:0 16px}
-.panelbox{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:auto}
-table{width:100%;border-collapse:collapse}
-th{text-align:left;font-weight:500;color:var(--muted);font-size:13px;padding:10px 14px;border-bottom:1px solid var(--line)}
-td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
-tbody tr:last-child td{border-bottom:0}
-tbody tr{cursor:pointer}
-tbody tr:hover{background:var(--soft)}
-.port{font-family:var(--mono);font-size:24px;font-weight:600;letter-spacing:-.5px}
-.num{font-family:var(--mono);text-align:right}
-th.num{text-align:right}
-.led{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--muted);margin-right:8px;vertical-align:-1px}
-.led.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent)}
+html,body{margin:0;min-height:100%}
+body{
+  font:15px/1.45 var(--sans); color:var(--ink);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(56,189,248,.25), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(94,234,212,.2), transparent 50%),
+    radial-gradient(800px 500px at 50% 100%, rgba(167,139,250,.15), transparent 45%),
+    linear-gradient(160deg,var(--bg0),var(--bg1));
+  background-attachment:fixed;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+button{
+  cursor:pointer; border:1px solid var(--stroke); background:var(--glass);
+  backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  padding:9px 14px; border-radius:999px; transition:.18s ease;
+}
+button:hover{border-color:var(--stroke2); background:var(--glass2)}
+button.primary{
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:#042f2e; border:0; font-weight:600; box-shadow:0 8px 24px rgba(56,189,248,.25);
+}
+button.primary:hover{filter:brightness(1.05)}
+button.danger{color:var(--bad); border-color:color-mix(in srgb,var(--bad) 40%, transparent)}
+button.ghost{background:transparent}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+input,select,textarea{
+  width:100%; border:1px solid var(--stroke); background:var(--soft);
+  border-radius:var(--r2); padding:10px 12px; backdrop-filter:blur(8px);
+}
+label{display:block; margin:0 0 12px; color:var(--muted); font-size:13px}
+label input,label select,label textarea{margin-top:5px; color:var(--ink); font-size:15px}
+label.inline{display:flex; gap:8px; align-items:center}
+label.inline input{width:auto; margin:0}
+.hint{color:var(--muted); font-size:13px; margin:-4px 0 12px}
+.mono{font-family:var(--mono); font-size:12px; word-break:break-all}
+
+.shell{max-width:1100px; margin:0 auto; padding:18px 16px 48px}
+header.top{
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:14px 18px; margin-bottom:18px;
+  background:var(--glass); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--stroke); border-radius:var(--r); box-shadow:var(--shadow);
+}
+header.top h1{margin:0; font-size:17px; font-weight:650; letter-spacing:-.02em; flex:1}
+header.top .ver{color:var(--muted); font-size:12px}
+
+.glass{
+  background:var(--glass); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--stroke); border-radius:var(--r); box-shadow:var(--shadow);
+}
+.panel{padding:18px; margin-bottom:16px}
+.grid{display:grid; gap:14px}
+@media(min-width:720px){.grid.two{grid-template-columns:1fr 1fr}}
+@media(min-width:960px){.grid.cards{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}}
+
+.card{
+  padding:16px; border-radius:var(--r); border:1px solid var(--stroke);
+  background:var(--glass); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  cursor:pointer; transition:.2s;
+}
+.card:hover{border-color:var(--stroke2); transform:translateY(-1px)}
+.card .port{font-size:28px; font-weight:700; letter-spacing:-.03em}
+.card .meta{color:var(--muted); font-size:13px; margin-top:4px}
+.row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+.spacer{flex:1}
+
+.led{display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--muted); margin-right:7px; vertical-align:1px}
+.led.ok{background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 28%,transparent)}
 .led.warn{background:var(--warn)} .led.bad{background:var(--bad)}
-.sub{color:var(--muted);font-size:13px}
-.empty{padding:40px 24px;text-align:center}
-.empty h2{margin:0 0 6px;font-size:19px}
-.empty p{color:var(--muted);max-width:520px;margin:0 auto 18px}
-.overlay{position:fixed;inset:0;background:rgba(10,20,22,.45);display:flex;justify-content:flex-end;z-index:10}
-.overlay.center{justify-content:center;align-items:center}
-.drawer{width:min(640px,100%);height:100%;background:var(--surface);overflow:auto;padding:20px 22px}
-.dialog{width:min(460px,92vw);max-height:92vh;overflow:auto;background:var(--surface);border-radius:10px;padding:22px}
-.drawer h2,.dialog h2{margin:0 0 4px;font-size:19px}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:14px 0 16px}
-.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:8px 12px;color:var(--muted)}
-.tabs button.on{color:var(--ink);border-color:var(--accent)}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.user{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px}
-.user .name{font-weight:600}
-.user .link{font-family:var(--mono);font-size:12px;word-break:break-all;color:var(--muted);margin:8px 0;background:var(--soft);padding:6px 8px;border-radius:5px}
-.check{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+
+.pill{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600;
+  background:var(--soft); border:1px solid var(--stroke);
+}
+.pill.web{color:var(--accent2); border-color:color-mix(in srgb,var(--accent2) 40%,transparent)}
+.pill.tls{color:var(--accent)}
+
+.empty{text-align:center; padding:48px 20px}
+.empty h2{margin:0 0 8px; font-size:22px; letter-spacing:-.02em}
+.empty p{color:var(--muted); max-width:460px; margin:0 auto 20px}
+
+.overlay{
+  position:fixed; inset:0; z-index:20;
+  background:rgba(6,12,24,.45); backdrop-filter:blur(8px);
+  display:flex; justify-content:flex-end;
+}
+.overlay.center{justify-content:center; align-items:center; padding:16px}
+.drawer{
+  width:min(640px,100%); height:100%; overflow:auto; padding:20px 18px 40px;
+  background:var(--glass2); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  border-left:1px solid var(--stroke); box-shadow:var(--shadow);
+}
+.dialog{
+  width:min(480px,94vw); max-height:92vh; overflow:auto; padding:22px;
+  background:var(--glass2); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--stroke); border-radius:22px; box-shadow:var(--shadow);
+}
+.drawer h2,.dialog h2{margin:0 0 4px; font-size:20px; letter-spacing:-.02em}
+.tabs{display:flex; gap:4px; border-bottom:1px solid var(--stroke); margin:14px 0 16px; overflow:auto}
+.tabs button{border:0; border-bottom:2px solid transparent; border-radius:0; background:none; color:var(--muted); padding:10px 12px; white-space:nowrap}
+.tabs button.on{color:var(--ink); border-color:var(--accent)}
+
+.user{
+  border:1px solid var(--stroke); border-radius:var(--r2); padding:12px; margin-bottom:10px;
+  background:var(--soft);
+}
+.user .name{font-weight:650}
+.user .link{font-family:var(--mono); font-size:12px; word-break:break-all; color:var(--muted); margin:8px 0; padding:8px; border-radius:8px; background:rgba(0,0,0,.15)}
+
+.check{display:flex; gap:10px; padding:10px 0; border-bottom:1px solid var(--stroke)}
 .check:last-child{border:0}
 .check b{display:block}
-pre.log{background:#0c1416;color:#c8d8d6;font:12px/1.4 var(--mono);padding:12px;border-radius:8px;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-all}
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;z-index:30}
-.toast.err{background:var(--bad);color:#fff}
-.preset{display:block;width:100%;text-align:left;margin-bottom:6px}
-.login{max-width:340px;margin:18vh auto;background:var(--surface);padding:24px;border-radius:10px;border:1px solid var(--line)}
-@media(max-width:700px){.hide-s{display:none}.port{font-size:20px}}
-@media(prefers-reduced-motion:no-preference){.led.ok{transition:box-shadow .3s}}
+
+pre.log{
+  background:rgba(0,0,0,.35); color:#c8d8d6; font:12px/1.4 var(--mono);
+  padding:12px; border-radius:12px; max-height:55vh; overflow:auto; white-space:pre-wrap; word-break:break-all;
+  border:1px solid var(--stroke);
+}
+pre.cfg{
+  background:rgba(0,0,0,.3); color:#d1e7e4; font:12px/1.45 var(--mono);
+  padding:12px; border-radius:12px; max-height:40vh; overflow:auto; white-space:pre-wrap;
+  border:1px solid var(--stroke);
+}
+
+.toast{
+  position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
+  background:var(--ink); color:var(--bg0); padding:11px 18px; border-radius:999px;
+  z-index:40; box-shadow:var(--shadow); max-width:90vw; text-align:center;
+}
+.toast.err{background:var(--bad); color:#fff}
+
+.login-wrap{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px}
+.login{
+  width:min(380px,100%); padding:28px; border-radius:24px;
+  background:var(--glass2); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--stroke); box-shadow:var(--shadow);
+}
+.login h1{margin:0 0 6px; font-size:22px}
+.steps{display:grid; gap:10px; margin:14px 0}
+.step{
+  display:flex; gap:12px; align-items:flex-start; padding:12px; border-radius:14px;
+  background:var(--soft); border:1px solid var(--stroke);
+}
+.step .n{
+  width:26px; height:26px; border-radius:50%; display:grid; place-items:center;
+  font-size:12px; font-weight:700; background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#042f2e; flex-shrink:0;
+}
+.drop{
+  border:1.5px dashed var(--stroke2); border-radius:14px; padding:22px; text-align:center;
+  color:var(--muted); background:var(--soft); cursor:pointer;
+}
+.drop.over{border-color:var(--accent); color:var(--ink)}
+.progress{height:4px; background:var(--soft); border-radius:99px; overflow:hidden; margin-top:8px}
+.progress>i{display:block; height:100%; width:0; background:linear-gradient(90deg,var(--accent),var(--accent2)); transition:width .2s}
+
+@media(max-width:700px){
+  .hide-s{display:none}
+  .card .port{font-size:22px}
+  header.top{padding:12px 14px}
+  .drawer{width:100%}
+}
+@media(prefers-reduced-motion:no-preference){
+  .led.ok{transition:box-shadow .3s}
+}
 </style>
 </head>
 <body>
@@ -84,6 +204,7 @@ function h(tag, a, ...kids){
   const e = document.createElement(tag);
   for (const [k,v] of Object.entries(a||{})){
     if (k==='class') e.className = v;
+    else if (k==='html') e.innerHTML = v;
     else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
     else if (v === true) e.setAttribute(k,'');
     else if (v !== false && v != null) e.setAttribute(k, v);
@@ -95,276 +216,436 @@ async function api(method, url, body){
   const r = await fetch(url, {method, headers:{'Content-Type':'application/json','X-Requested-With':'panel'}, body: body?JSON.stringify(body):undefined});
   if (r.status === 401 && url !== '/api/login'){ showLogin(); throw new Error('login'); }
   const d = await r.json().catch(()=>({}));
-  if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : 'Ошибка '+r.status);
+  if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : (d.detail?.[0]?.msg || 'Ошибка '+r.status));
   return d;
 }
 function toast(msg, err){
-  const t = h('div',{class:'toast'+(err?' err':''),role:'status'},msg); document.body.append(t); setTimeout(()=>t.remove(), 3500);
+  const t = h('div',{class:'toast'+(err?' err':'')}, msg);
+  document.body.append(t); setTimeout(()=>t.remove(), 3200);
 }
 async function act(fn, ok){ try{ await fn(); if (ok) toast(ok); await refresh(); }catch(e){ if (e.message!=='login') toast(e.message,true); } }
-const fmtB = n => n<1024?n+' Б':n<1048576?(n/1024).toFixed(1)+' КБ':n<1073741824?(n/1048576).toFixed(1)+' МБ':(n/1073741824).toFixed(2)+' ГБ';
-const fmtT = s => s<60?s+' с':s<3600?Math.floor(s/60)+' мин':s<86400?Math.floor(s/3600)+' ч':Math.floor(s/86400)+' д';
 async function copy(text){
   try{ await navigator.clipboard.writeText(text); toast('Скопировано'); }
-  catch{ const t=h('textarea',{},text); document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); toast('Скопировано'); }
+  catch{ toast('Не удалось скопировать', true); }
+}
+function fmtB(n){ if(!n) return '0 B'; const u=['B','KB','MB','GB']; let i=0; let x=n; while(x>=1024&&i<u.length-1){x/=1024;i++} return x.toFixed(i?1:0)+' '+u[i]; }
+function ledOf(i){
+  if(!i.enabled) return ['','выкл'];
+  if(i.status?.running && i.status?.api) return ['ok','онлайн'];
+  if(i.status?.running) return ['warn','старт…'];
+  return ['bad','стоп'];
 }
 
 function showLogin(){
-  clearInterval(poll); $app.replaceChildren();
-  const pw = h('input',{type:'password',autocomplete:'current-password',autofocus:true});
-  const go = async ()=>{ try{ await api('POST','/api/login',{password:pw.value}); start(); }catch(e){ toast(e.message,true); } };
-  pw.addEventListener('keydown',e=>{ if(e.key==='Enter') go(); });
-  $app.append(h('div',{class:'login'}, h('h2',{style:'margin-top:0'},'Вход в панель'), h('label',{},'Пароль администратора',pw), h('button',{class:'primary',onclick:go},'Войти')));
-}
-
-function ledOf(i){
-  if (!i.enabled) return ['','Выключен'];
-  if (!i.status.running) return ['bad','Не запущен'];
-  if (!i.status.api) return ['warn','Запускается'];
-  return ['ok','Работает'];
+  clearInterval(poll); poll=null;
+  const pw = h('input',{type:'password', placeholder:'пароль панели', autocomplete:'current-password'});
+  const go = async()=>{ try{ await api('POST','/api/login',{password:pw.value}); await start(); }catch(e){ toast(e.message,true);} };
+  pw.addEventListener('keydown', e=>{ if(e.key==='Enter') go(); });
+  $app.replaceChildren(h('div',{class:'login-wrap'}, h('div',{class:'login'},
+    h('h1',{},'telemt panel'),
+    h('p',{class:'hint'},'Вход только с localhost / SSH-туннеля'),
+    h('label',{},'Пароль', pw),
+    h('div',{class:'row',style:'margin-top:8px'}, h('button',{class:'primary',onclick:go},'Войти'))
+  )));
+  setTimeout(()=>pw.focus(), 50);
 }
 
 function render(){
-  if (!S) return;
-  const root = h('div');
-  root.append(h('header',{},
-    h('h1',{},'telemt panel'),
-    h('span',{class:'host',title:'Адрес в ссылках для клиентов'}, S.settings.public_host || S.settings.detected_host || 'адрес не определён'),
-    h('span',{class:'sp'}),
-    h('button',{onclick:systemDialog},'Система'),
-    h('button',{class:'primary',onclick:()=>instanceDialog()},'Добавить инстанс'),
-    h('button',{onclick:async()=>{ await api('POST','/api/logout'); showLogin(); }},'Выйти')));
-  const main = h('main'); root.append(main);
-  if (!S.instances.length){
-    main.append(h('div',{class:'panelbox empty'}, h('h2',{},'Инстансов пока нет'),
-      h('p',{},'Несколько инстансов на разных портах с разными маскировочными доменами — запас на случай, если один порт начнут душить. Порты и домены вы задаёте сами.'),
+  if(!S) return;
+  const root = h('div',{class:'shell'});
+  root.append(h('header',{class:'top'},
+    h('h1',{},'telemt'),
+    h('span',{class:'ver'}, S.settings?.detected_host || ''),
+    h('button',{onclick:()=>systemDialog()},'Система'),
+    h('button',{onclick:()=>webWizard()},'WEB-прокси'),
+    h('button',{onclick:()=>instanceDialog()},'+ FakeTLS'),
+    h('button',{class:'ghost',onclick:()=>act(()=>api('POST','/api/logout'),null).then(showLogin)},'Выйти')
+  ));
+
+  const main = h('div',{});
+  root.append(main);
+
+  if(!S.instances.length){
+    main.append(h('div',{class:'glass panel empty'},
+      h('h2',{},'Нет инстансов'),
+      h('p',{},'Создайте WEB-прокси (рекомендуется) или классический FakeTLS. WEB маскируется под обычный сайт на 443.'),
       h('div',{class:'row',style:'justify-content:center'},
-        h('button',{class:'primary',onclick:quickDialog},'Быстрый старт'),
-        h('button',{onclick:()=>instanceDialog()},'Один инстанс вручную'))));
+        h('button',{class:'primary',onclick:webWizard},'Создать WEB-прокси'),
+        h('button',{onclick:()=>instanceDialog()},'FakeTLS')
+      )
+    ));
   } else {
-    const tbody = h('tbody');
-    for (const i of S.instances){
+    const cards = h('div',{class:'grid cards'});
+    for(const i of S.instances){
       const [cls,txt] = ledOf(i);
-      const conns = i.users.reduce((a,u)=>a+u.connections,0);
       const isWeb = (i.transport||'tls')==='web';
-      tbody.append(h('tr',{tabindex:0,onclick:()=>openInstance(i.id),onkeydown:e=>{if(e.key==='Enter')openInstance(i.id)}},
-        h('td',{}, h('span',{class:'led '+cls}), txt),
-        h('td',{}, h('div',{class:'port'}, isWeb ? '443 WEB' : i.port), h('div',{class:'sub'},i.name)),
-        h('td',{class:'hide-s'}, isWeb ? (i.web_base_path ? '/'+i.web_base_path : 'весь vhost') : i.sni, h('div',{class:'sub'}, isWeb ? 'loopback:'+(i.web_listen_port||'?') : ('MSS: '+(i.mss||'авто')))),
-        h('td',{class:'num'},conns),
-        h('td',{class:'num hide-s'},i.stats.connections_total),
-        h('td',{class:'num hide-s',style:i.stats.bad_total?'color:var(--warn)':''},i.stats.bad_total)));
+      const conns = i.users.reduce((a,u)=>a+u.connections,0);
+      cards.append(h('div',{class:'card',tabindex:0,onclick:()=>openInstance(i.id),onkeydown:e=>{if(e.key==='Enter')openInstance(i.id)}},
+        h('div',{class:'row'},
+          h('span',{}, h('span',{class:'led '+cls}), txt),
+          h('span',{class:'spacer'}),
+          h('span',{class:'pill '+(isWeb?'web':'tls')}, isWeb?'WEB':'FakeTLS')
+        ),
+        h('div',{class:'port',style:'margin-top:10px'}, isWeb ? '443' : i.port),
+        h('div',{class:'meta'}, i.name),
+        h('div',{class:'meta'}, isWeb
+          ? ((i.web_base_path?('/'+i.web_base_path+' · '):'')+'loopback '+(i.web_listen_port||'?'))
+          : (i.sni+' · MSS '+(i.mss||'авто'))),
+        h('div',{class:'row',style:'margin-top:12px'},
+          h('span',{class:'meta'},'онлайн '+conns),
+          h('span',{class:'spacer'}),
+          h('span',{class:'meta'},'всего '+i.stats.connections_total)
+        )
+      ));
     }
-    main.append(h('div',{class:'panelbox'}, h('table',{},
-      h('thead',{}, h('tr',{}, h('th',{},'Состояние'),h('th',{},'Порт / тип'),h('th',{class:'hide-s'},'Маска / path'),h('th',{class:'num'},'Онлайн'),h('th',{class:'num hide-s'},'Всего'),h('th',{class:'num hide-s'},'Отбраковано'))),
-      tbody)));
-    main.append(h('p',{class:'sub'},'Порты, лимит соединений, keepalive и BBR настраиваются в разделе «Система».'));
+    main.append(cards);
   }
+
+  // Caddy strip
+  const c = S.caddy || {};
+  main.append(h('div',{class:'glass panel',style:'margin-top:8px'},
+    h('div',{class:'row'},
+      h('b',{},'Caddy / TLS'),
+      h('span',{class:'spacer'}),
+      h('span',{class:'pill'}, c.port_443_open ? '443 открыт' : '443 закрыт'),
+      h('button',{onclick:()=>caddyDialog()},'Настроить')
+    ),
+    h('p',{class:'hint',style:'margin:10px 0 0'},
+      c.binary
+        ? ('Caddy: '+(c.version||c.binary))
+        : 'Caddy на хосте не найден — скачайте Caddyfile и запустите сами, либо установите caddy в PATH.'
+    )
+  ));
+
   $app.replaceChildren(root);
-  const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#drawer-layer') && ['INPUT','SELECT'].includes(document.activeElement.tagName);
+  const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#drawer-layer') && ['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName);
   if (openId != null && !typing) drawDrawer();
 }
 
-/* ---------- drawer ---------- */
 function openInstance(id){ openId = id; tab = 'users'; drawDrawer(); }
 function closeDrawer(){ openId = null; clearInterval(logTimer); document.getElementById('drawer-layer')?.remove(); }
 function drawDrawer(){
   clearInterval(logTimer);
   const i = S.instances.find(x=>x.id===openId);
+  if(!i){ closeDrawer(); return; }
   document.getElementById('drawer-layer')?.remove();
-  if (!i){ openId=null; return; }
-  const body = h('div');
-  if (tab==='users') usersTab(body,i);
-  if (tab==='diag') diagTab(body,i);
-  if (tab==='logs') logsTab(body,i);
-  if (tab==='cfg') cfgTab(body,i);
-  const [cls,txt] = ledOf(i);
-  const tabBtn = (k,t)=>h('button',{class:tab===k?'on':'',onclick:()=>{tab=k;clearInterval(logTimer);drawDrawer();}},t);
+  const body = h('div',{});
   const layer = h('div',{class:'overlay',id:'drawer-layer',onclick:e=>{if(e.target===layer)closeDrawer()}},
-    h('div',{class:'drawer',role:'dialog','aria-label':'Инстанс '+i.name},
-      h('div',{class:'row'}, h('div',{style:'flex:1'}, h('h2',{},'Порт '+i.port), h('div',{class:'sub'}, h('span',{class:'led '+cls}),txt+' · '+i.sni+(i.status.running?' · '+fmtT(i.status.uptime):''))),
-        h('button',{onclick:closeDrawer},'Закрыть')),
-      h('div',{class:'tabs'}, tabBtn('users','Пользователи'),tabBtn('diag','Диагностика'),tabBtn('logs','Логи'),tabBtn('cfg','Настройки')),
-      body));
+    h('div',{class:'drawer',role:'dialog'},
+      h('div',{class:'row'},
+        h('div',{},
+          h('h2',{},i.name),
+          h('div',{class:'hint',style:'margin:0'}, (i.transport==='web'?'WEB · ':'FakeTLS · ')+ledOf(i)[1])
+        ),
+        h('span',{class:'spacer'}),
+        h('button',{onclick:closeDrawer},'✕')
+      ),
+      h('div',{class:'tabs'},
+        ...['users','diag','logs','cfg'].map(t=>{
+          const labels={users:'Пользователи',diag:'Диагностика',logs:'Логи',cfg:'Настройки'};
+          return h('button',{class:tab===t?'on':'',onclick:()=>{tab=t; drawDrawer();}}, labels[t]);
+        })
+      ),
+      body
+    )
+  );
   document.body.append(layer);
+  if(tab==='users') usersTab(body,i);
+  else if(tab==='diag') diagTab(body,i);
+  else if(tab==='logs') logsTab(body,i);
+  else cfgTab(body,i);
 }
+
 function usersTab(body,i){
   const isWeb = (i.transport||'tls') === 'web';
   if (isWeb) {
-    body.append(h('div',{class:'hint',style:'margin-bottom:12px;padding:10px;background:var(--soft);border-radius:8px'},
-      h('b',{},'WEB-режим (tg://webproxy). '),
-      `Telemt слушает 127.0.0.1:${i.web_listen_port}. Снаружи нужен nginx/Caddy на 443 с TLS и proxy_pass на этот порт. `,
-      'Клиенты: Telegram Desktop 7.1+, свежий Android. Звонки через WEB пока не работают.'));
+    body.append(h('div',{class:'step',style:'margin-bottom:14px'},
+      h('div',{class:'n'},'W'),
+      h('div',{},
+        h('b',{},'WEB-режим'),
+        h('div',{class:'hint',style:'margin:4px 0 0'},
+          `Telemt на 127.0.0.1:${i.web_listen_port}. Снаружи — Caddy на 443. Клиенты: Desktop 7.1+, свежий Android.`
+        )
+      )
+    ));
   }
   for (const u of i.users){
     body.append(h('div',{class:'user'},
-      h('div',{class:'row'}, h('span',{class:'name',style:'flex:1'},u.name), h('span',{class:'sub'},`онлайн ${u.connections} · IP ${u.ips} · ${fmtB(u.octets)}`)),
+      h('div',{class:'row'}, h('span',{class:'name',style:'flex:1'},u.name), h('span',{class:'hint',style:'margin:0'},`онлайн ${u.connections} · IP ${u.ips} · ${fmtB(u.octets)}`)),
       h('div',{class:'link'},u.link),
-      !u.link_from_api && h('div',{class:'hint',style:'margin:0 0 8px'},'Ссылка собрана панелью (telemt ещё не ответил). Если не работает — подождите минуту.'),
+      !u.link_from_api && h('div',{class:'hint'},'Ссылка собрана панелью — если не работает, подождите минуту.'),
       h('div',{class:'row'},
-        h('button',{class:'primary',onclick:()=>copy(u.link)}, isWeb ? 'Копировать tg://webproxy' : 'Копировать tg://'),
-        h('button',{onclick:()=>copy(u.web_link)}, isWeb ? 'Копировать t.me/webproxy' : 'Копировать t.me'),
-        h('button',{onclick:()=>confirm('Выпустить новый секрет? Старая ссылка перестанет работать.')&&act(()=>api('POST',`/api/instances/${i.id}/users/${encodeURIComponent(u.name)}/rotate`),'Секрет обновлён')},'Новый секрет'),
-        h('button',{class:'danger',onclick:()=>confirm('Удалить пользователя '+u.name+'?')&&act(()=>api('DELETE',`/api/instances/${i.id}/users/${encodeURIComponent(u.name)}`),'Удалён')},'Удалить'))));
+        h('button',{class:'primary',onclick:()=>copy(u.link)}, isWeb?'Копировать webproxy':'Копировать tg://'),
+        h('button',{onclick:()=>copy(u.web_link)}, 't.me'),
+        h('button',{onclick:()=>confirm('Новый секрет? Старая ссылка умрёт.')&&act(()=>api('POST',`/api/instances/${i.id}/users/${encodeURIComponent(u.name)}/rotate`),'Секрет обновлён')},'Новый секрет'),
+        h('button',{class:'danger',onclick:()=>confirm('Удалить '+u.name+'?')&&act(()=>api('DELETE',`/api/instances/${i.id}/users/${encodeURIComponent(u.name)}`),'Удалён')},'Удалить')
+      )
+    ));
   }
   const nm = h('input',{placeholder:'имя, например anna',maxlength:64});
-  body.append(h('div',{class:'row'}, nm, h('button',{onclick:()=>nm.value&&act(()=>api('POST',`/api/instances/${i.id}/users`,{name:nm.value}),'Пользователь добавлен')},'Добавить')));
-  body.append(h('p',{class:'hint'},'Одной ссылкой может пользоваться любое число людей. Отдельные пользователи нужны, чтобы видеть статистику и отзывать доступ.'));
-}
-async function diagTab(body,i){
-  body.append(h('p',{class:'sub'},'Проверяем…'));
-  try{
-    const d = await api('GET',`/api/instances/${i.id}/diagnostics`);
-    body.replaceChildren(...d.checks.map(c=>h('div',{class:'check'}, h('span',{class:'led '+({ok:'ok',warn:'warn',bad:'bad'}[c.level]||'')}), h('div',{}, h('b',{},c.title), h('span',{class:'sub'},c.detail)))),
-      h('button',{onclick:()=>drawDrawer(),style:'margin-top:12px'},'Проверить снова'));
-  }catch(e){ if(e.message!=='login') body.replaceChildren(h('p',{},e.message)); }
-}
-function logsTab(body,i){
-  const pre = h('pre',{class:'log'},'…'); body.append(pre);
-  const load = async()=>{ try{ const d=await api('GET',`/api/instances/${i.id}/logs`); const stick = pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30; pre.textContent=d.lines.join('\n')||'Логов пока нет'; if(stick)pre.scrollTop=pre.scrollHeight; }catch{} };
-  load(); logTimer=setInterval(load,3000);
-}
-function cfgTab(body,i){
-  const f = formFields(i);
-  body.append(f.el, h('div',{class:'row'},
-    h('button',{class:'primary',onclick:()=>act(async()=>{await api('PATCH','/api/instances/'+i.id,f.get());},'Сохранено, инстанс перезапущен')},'Сохранить и перезапустить'),
-    h('button',{onclick:()=>act(()=>api('POST',`/api/instances/${i.id}/restart`),'Перезапущен')},'Только перезапуск'),
-    h('button',{class:'danger',onclick:()=>confirm('Удалить инстанс вместе с пользователями?')&&act(async()=>{await api('DELETE','/api/instances/'+i.id);closeDrawer();},'Удалён')},'Удалить')));
-  body.append(h('p',{class:'hint',style:'margin-top:14px'},'После смены SNI или порта прежние ссылки перестанут работать — раздайте новые.'));
+  body.append(h('div',{class:'row'}, nm, h('button',{onclick:()=>nm.value&&act(()=>api('POST',`/api/instances/${i.id}/users`,{name:nm.value}),'Добавлен')},'Добавить')));
 }
 
-/* ---------- формы ---------- */
+async function diagTab(body,i){
+  body.append(h('p',{class:'hint'},'Проверяем…'));
+  try{
+    const d = await api('GET',`/api/instances/${i.id}/diagnostics`);
+    body.replaceChildren(...d.checks.map(c=>h('div',{class:'check'},
+      h('span',{class:'led '+({ok:'ok',warn:'warn',bad:'bad'}[c.level]||'')}),
+      h('div',{}, h('b',{},c.title), h('span',{class:'hint',style:'margin:0'},c.detail))
+    )), h('button',{onclick:()=>drawDrawer(),style:'margin-top:12px'},'Проверить снова'));
+  }catch(e){ if(e.message!=='login') body.replaceChildren(h('p',{},e.message)); }
+}
+
+function logsTab(body,i){
+  const pre = h('pre',{class:'log'},'…'); body.append(pre);
+  const load = async()=>{ try{ const d=await api('GET',`/api/instances/${i.id}/logs`); const stick=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30; pre.textContent=d.lines.join('\n')||'Логов пока нет'; if(stick)pre.scrollTop=pre.scrollHeight; }catch{} };
+  load(); logTimer=setInterval(load,3000);
+}
+
+function cfgTab(body,i){
+  const f = formFields(i);
+  body.append(f.el, h('div',{class:'row',style:'margin-top:8px'},
+    h('button',{class:'primary',onclick:()=>act(async()=>{await api('PATCH','/api/instances/'+i.id,f.get());},'Сохранено')},'Сохранить'),
+    h('button',{onclick:()=>act(()=>api('POST',`/api/instances/${i.id}/restart`),'Перезапущен')},'Рестарт'),
+    h('button',{class:'danger',onclick:()=>confirm('Удалить инстанс?')&&act(async()=>{await api('DELETE','/api/instances/'+i.id);closeDrawer();},'Удалён')},'Удалить')
+  ));
+}
+
 function formFields(i){
-  const v = i||{port:'',sni:'',mss:'tspu',middle_proxy:false,ad_tag:'',mask_host:'',mask_port:443,enabled:true,name:'',transport:'tls',web_base_path:'',web_decoy_upstream:'http://127.0.0.1:18081'};
-  const name=h('input',{value:v.name,placeholder:'необязательно',maxlength:40});
-  const transport=h('select',{}, h('option',{value:'tls'},'FakeTLS (ee) — классика'), h('option',{value:'web'},'WEB (tg://webproxy) — HTTPS/WebSocket'));
+  const v = i||{port:443,sni:'www.cloudflare.com',mss:'tspu',middle_proxy:false,ad_tag:'',mask_host:'',mask_port:443,enabled:true,name:'',transport:'tls',web_base_path:'',web_site:'default'};
+  const name=h('input',{value:v.name||'',placeholder:'необязательно',maxlength:40});
+  const transport=h('select',{}, h('option',{value:'tls'},'FakeTLS (ee)'), h('option',{value:'web'},'WEB (tg://webproxy)'));
   transport.value = v.transport || 'tls';
   const port=h('input',{type:'number',min:1,max:65535,value:v.port||443});
-  const sni=h('input',{value:v.sni,placeholder:'www.cloudflare.com'});
-  const basePath=h('input',{value:v.web_base_path||'',placeholder:'пусто = весь домен, или tg / telegram/web'});
-  const decoy=h('input',{value:v.web_decoy_upstream||'http://127.0.0.1:18081',placeholder:'http://127.0.0.1:18081'});
-  const mssSel=h('select',{}, h('option',{value:'tspu'},'tspu (MSS 92) — рекомендуется для РФ'), h('option',{value:''},'Выключено'), h('option',{value:'custom'},'Своё значение'));
-  const mssNum=h('input',{type:'number',min:40,max:1460,placeholder:'например 88'});
-  if (v.mss==='tspu') mssSel.value='tspu'; else if (v.mss==='') mssSel.value=''; else { mssSel.value='custom'; mssNum.value=v.mss; }
-  const mssWrap=h('div'); const syncM=()=>{mssNum.style.display=mssSel.value==='custom'?'':'none'}; mssSel.addEventListener('change',syncM); syncM();
-  const mm=h('input',{type:'checkbox',checked:v.middle_proxy}); const ad=h('input',{value:v.ad_tag,placeholder:'32 hex от @MTProxybot'});
-  const mh=h('input',{value:v.mask_host,placeholder:'пусто = SNI-домен'}); const mp=h('input',{type:'number',value:v.mask_port});
-  const adv=h('details',{}, h('summary',{style:'cursor:pointer;color:var(--muted);margin-bottom:10px'},'Дополнительно (FakeTLS)'),
-    h('label',{class:'inline'},mm,'Использовать middle-proxy'),
-    h('label',{},'ad_tag (спонсорский канал; включает middle-proxy)',ad),
-    h('label',{},'mask_host — куда пересылать «чужие» соединения (например, свой сайт)',mh),
-    h('label',{},'mask_port',mp));
-  const webAdv=h('details',{}, h('summary',{style:'cursor:pointer;color:var(--muted);margin-bottom:10px'},'Параметры WEB'),
-    h('label',{},'base_path (путь на сайте, без ведущего /)',basePath),
-    h('label',{},'decoy upstream (обычный сайт для «чужих» запросов)',decoy),
-    h('p',{class:'hint'},'После сохранения настройте nginx: location → proxy_pass http://127.0.0.1:&lt;web_listen_port&gt;. См. README.'));
-  const en=h('input',{type:'checkbox',checked:v.enabled});
-  const tlsFields=h('div',{}, h('label',{},'Порт',port), h('label',{},'Маскировочный домен (SNI)',sni));
-  const webFields=h('div',{}, h('p',{class:'hint'},'Публичный порт всегда 443 (TLS терминирует nginx/Caddy). В «Системе» должен быть задан домен.'));
-  const syncT=()=>{ const w=transport.value==='web'; tlsFields.style.display=w?'none':''; webFields.style.display=w?'':'none'; adv.style.display=w?'none':''; webAdv.style.display=w?'':'none'; };
+  const sni=h('input',{value:v.sni||'',placeholder:'www.cloudflare.com'});
+  const basePath=h('input',{value:v.web_base_path||'',placeholder:'пусто = весь домен'});
+  const siteSel=h('select',{});
+  const sites = S?.sites || [{id:'default'}];
+  for(const s of sites) siteSel.append(h('option',{value:s.id}, s.id+(s.has_index?'':' (нет index)')));
+  siteSel.value = v.web_site || 'default';
+  const mssSel=h('select',{}, h('option',{value:'tspu'},'tspu (рекомендуется)'), h('option',{value:''},'Выкл'), h('option',{value:'custom'},'Своё'));
+  const mssNum=h('input',{type:'number',min:40,max:1460,placeholder:'88'});
+  if (v.mss==='tspu') mssSel.value='tspu'; else if (!v.mss) mssSel.value=''; else { mssSel.value='custom'; mssNum.value=v.mss; }
+  const syncM=()=>{mssNum.style.display=mssSel.value==='custom'?'':'none'}; mssSel.addEventListener('change',syncM); syncM();
+  const mm=h('input',{type:'checkbox',checked:!!v.middle_proxy});
+  const ad=h('input',{value:v.ad_tag||'',placeholder:'32 hex'});
+  const mh=h('input',{value:v.mask_host||'',placeholder:'пусто = SNI'});
+  const mp=h('input',{type:'number',value:v.mask_port||443});
+  const en=h('input',{type:'checkbox',checked:v.enabled!==false});
+  const tlsBox=h('div',{}, h('label',{},'Порт',port), h('label',{},'SNI',sni),
+    h('label',{},'ClientHello MSS',mssSel,mssNum),
+    h('details',{}, h('summary',{style:'cursor:pointer;color:var(--muted);margin-bottom:8px'},'Дополнительно'),
+      h('label',{class:'inline'},mm,'middle-proxy'), h('label',{},'ad_tag',ad), h('label',{},'mask_host',mh), h('label',{},'mask_port',mp)
+    )
+  );
+  const webBox=h('div',{},
+    h('p',{class:'hint'},'Публично всегда 443. Caddy терминирует TLS и проксирует на telemt.'),
+    h('label',{},'Путь на сайте (base_path)',basePath),
+    h('label',{},'Сайт-прикрытие (decoy)',siteSel)
+  );
+  const syncT=()=>{ const w=transport.value==='web'; tlsBox.style.display=w?'none':''; webBox.style.display=w?'':'none'; };
   transport.addEventListener('change',syncT); syncT();
-  const el=h('div',{}, h('label',{},'Название',name), h('label',{},'Транспорт',transport), tlsFields, webFields, webAdv,
-    h('div',{class:'hint'},'Берите крупные сайты, к которым ходит весь интернет. Telemt подтянет их настоящий сертификат.'),
-    h('label',{},'Фрагментация ClientHello (client_mss)',mssSel,mssNum),
-    h('div',{class:'hint'},'Против JA4-детекта на ТСПУ. Если iOS-клиенты залипают — попробуйте «Выключено» на одном из инстансов.'),
-    adv, h('label',{class:'inline'},en,'Включён'));
-  return {el, port, sni, name, get:()=>({
+  const el=h('div',{},
+    h('label',{},'Название',name),
+    h('label',{},'Тип',transport),
+    tlsBox, webBox,
+    h('label',{class:'inline'},en,'Включён')
+  );
+  return {el, get:()=>({
     name:name.value, port:+port.value||443, sni:sni.value.trim()||'www.cloudflare.com',
     mss:mssSel.value==='custom'?String(mssNum.value):mssSel.value,
     middle_proxy:mm.checked, ad_tag:ad.value.trim(), mask_host:mh.value.trim(), mask_port:+mp.value||443,
     enabled:en.checked, transport:transport.value,
-    web_base_path:basePath.value.trim(), web_decoy_upstream:decoy.value.trim()||'http://127.0.0.1:18081'
+    web_base_path:basePath.value.trim(), web_site:siteSel.value, web_decoy_upstream:''
   })};
 }
+
+
 async function instanceDialog(){
-  if(!presets.length) presets = await api('GET','/api/presets');
-  const f = formFields(null);
+  if(!presets.length) try{ presets = await api('GET','/api/presets'); }catch(e){ presets=[]; }
+  const f = formFields({transport:'tls', enabled:true, mss:'tspu', port:443, sni:'www.cloudflare.com'});
+  const chips = h('div',{class:'row',style:'margin-bottom:12px;flex-wrap:wrap'});
+  for(const p of presets){
+    chips.append(h('button',{onclick:()=>{
+      // set port & sni inputs inside form
+      const labels = [...f.el.querySelectorAll('label')];
+      for(const lab of labels){
+        const t = lab.childNodes[0]?.textContent || '';
+        const inp = lab.querySelector('input');
+        if(!inp) continue;
+        if(t.includes('Порт')) inp.value = p.port;
+        if(t.includes('SNI')) inp.value = p.sni;
+      }
+    }}, String(p.port)));
+  }
   const layer = h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
-    h('div',{class:'dialog',role:'dialog'}, h('h2',{},'Новый инстанс'),
-      h('p',{class:'sub'},'Примеры — нажмите, чтобы подставить. Можно ввести любые свои порт и домен.'),
-      ...presets.map(p=>h('button',{class:'preset',onclick:()=>{f.port.value=p.port;f.sni.value=p.sni;}}, h('b',{},p.port+' · '+p.sni), h('div',{class:'sub'},p.note))),
-      h('div',{style:'height:12px'}), f.el,
-      h('div',{class:'row'}, h('button',{class:'primary',onclick:()=>act(async()=>{await api('POST','/api/instances',f.get());layer.remove();},'Инстанс создан')},'Создать'), h('button',{onclick:()=>{layer.remove();quickDialog();}},'Создать сразу несколько…'), h('button',{onclick:()=>layer.remove()},'Отмена'))));
+    h('div',{class:'dialog'},
+      h('h2',{},'FakeTLS инстанс'),
+      h('p',{class:'hint'},'Классический MTProxy с маскировкой под TLS. Для жёсткого DPI лучше WEB.'),
+      chips,
+      f.el,
+      h('div',{class:'row',style:'margin-top:12px'},
+        h('button',{class:'primary',onclick:()=>act(async()=>{await api('POST','/api/instances',f.get());layer.remove();},'Создан')},'Создать'),
+        h('button',{onclick:()=>layer.remove()},'Отмена')
+      )
+    )
+  );
   document.body.append(layer);
 }
-function quickDialog(){
-  (async()=>{
-    if(!presets.length) presets = await api('GET','/api/presets');
-    const rows = h('div'); const list=[];
-    const addRow=(port,sni)=>{
-      const pi=h('input',{type:'number',min:1,max:65535,placeholder:'порт',value:port||'',style:'width:110px'});
-      const si=h('input',{placeholder:'домен, например www.cloudflare.com',value:sni||''});
-      const rm=h('button',{class:'danger',title:'Убрать строку',onclick:()=>{ row.remove(); list.splice(list.indexOf(o),1); }},'✕');
-      const row=h('div',{class:'row',style:'margin-bottom:8px;flex-wrap:nowrap'},pi,si,rm); const o={pi,si};
-      list.push(o); rows.append(row);
-    };
-    presets.slice(0,3).forEach(p=>addRow(p.port,p.sni));
-    const go=async()=>{
-      const todo=list.filter(o=>o.pi.value||o.si.value.trim()); const errs=[]; let okN=0;
-      for(const o of todo){ try{ await api('POST','/api/instances',{port:+o.pi.value,sni:o.si.value.trim(),mss:'tspu'}); okN++; }catch(e){ errs.push((o.pi.value||'?')+': '+e.message); } }
-      if(okN) layer.remove(); await refresh();
-      if(errs.length) toast(errs.join(' · '),true); else toast('Создано инстансов: '+okN);
-    };
-    const layer=h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
-      h('div',{class:'dialog',style:'width:min(560px,94vw)',role:'dialog'}, h('h2',{},'Быстрый старт'),
-        h('p',{class:'sub'},'Для каждой строки создаётся инстанс с одним пользователем и client_mss=tspu. Значения ниже — просто пример: меняйте, добавляйте и удаляйте строки.'),
-        rows,
-        h('div',{class:'row',style:'margin:6px 0 14px'}, h('button',{onclick:()=>addRow('','')},'+ Добавить строку'),
-          ...presets.slice(3).map(p=>h('button',{title:p.note,onclick:()=>addRow(p.port,p.sni)},'+ '+p.port+' · '+p.sni))),
-        h('div',{class:'row'}, h('button',{class:'primary',onclick:go},'Создать'), h('button',{onclick:()=>layer.remove()},'Отмена'))));
-    document.body.append(layer);
-  })().catch(e=>toast(e.message,true));
+
+function webWizard(){
+  const host = S?.settings?.public_host || '';
+  const path = h('input',{placeholder:'пусто = весь домен, или tg', value:''});
+  const site = h('select',{});
+  for(const s of (S?.sites||[{id:'default'}])) site.append(h('option',{value:s.id},s.id));
+  const name = h('input',{placeholder:'необязательно'});
+  const layer = h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
+    h('div',{class:'dialog'},
+      h('h2',{},'WEB-прокси'),
+      h('p',{class:'hint'},'Трафик выглядит как обычный HTTPS-сайт. Нужен домен и Caddy на 443.'),
+      h('div',{class:'steps'},
+        h('div',{class:'step'}, h('div',{class:'n'},'1'), h('div',{},
+          h('b',{},'Домен'),
+          h('div',{class:'hint',style:'margin:4px 0 0'}, host ? host : 'Не задан — укажите в Системе'),
+          !host && h('button',{style:'margin-top:8px',onclick:()=>{layer.remove(); systemDialog();}},'Открыть Систему')
+        )),
+        h('div',{class:'step'}, h('div',{class:'n'},'2'), h('div',{},
+          h('b',{},'Путь (необязательно)'),
+          h('div',{style:'margin-top:6px'}, path),
+          h('div',{class:'hint'},'Например tg — прокси будет на https://домен/tg/')
+        )),
+        h('div',{class:'step'}, h('div',{class:'n'},'3'), h('div',{},
+          h('b',{},'Сайт-прикрытие'),
+          h('div',{style:'margin-top:6px'}, site),
+          h('div',{class:'hint'},'Что видят без правильной ссылки. Загрузите свой в Системе → Сайты.')
+        ))
+      ),
+      h('label',{},'Название', name),
+      h('div',{class:'row'},
+        h('button',{class:'primary',disabled:!host,onclick:()=>act(async()=>{
+          await api('POST','/api/instances/web',{name:name.value, base_path:path.value, site:site.value});
+          layer.remove();
+          toast('WEB создан — настройте Caddy');
+        },'WEB создан')},'Создать'),
+        h('button',{onclick:()=>layer.remove()},'Отмена')
+      )
+    )
+  );
+  document.body.append(layer);
 }
 
-async function systemDialog(){
-  let I; try{ I = await api('GET','/api/system'); }catch(e){ return; }
-  const layer=h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}});
-  const led=(c)=>h('span',{class:'led '+c});
-  const chk=(on,t)=>{ const c=h('input',{type:'checkbox',checked:on}); return {c, el:h('label',{class:'inline'},c,t)}; };
-  const host=h('input',{value:S.settings.public_host,placeholder:S.settings.detected_host||'proxy.example.com'});
-  const sc=chk(I.system.sysctl,'Быстрый TCP keepalive и BBR (лечит залипание iOS после сворачивания Telegram)');
-  const fc=chk(I.system.firewall,'Открывать порты инстансов в файрволе хоста');
-  const rc=chk(I.system.rate_limit,'Ограничение: 1 новое соединение в секунду с одного IP на порт (против зондирования)');
-  const saveSys=()=>act(async()=>{ await api('PUT','/api/system',{sysctl:sc.c.checked,firewall:fc.c.checked,rate_limit:rc.c.checked}); layer.remove(); },'Применено');
-  const fwTxt = !I.system.firewall ? 'Выключено' : I.firewall.error ? I.firewall.error : I.firewall.active ? 'Открыты порты: '+(I.firewall.ports.join(', ')||'—') : 'Ожидает применения';
-  const fwCls = !I.system.firewall ? '' : I.firewall.error ? 'bad' : I.firewall.active ? 'ok' : 'warn';
-  const sysBad = I.sysctl.filter(x=>!x.ok);
-  const sysTxt = !I.system.sysctl ? 'Выключено' : sysBad.length ? 'Не применилось: '+sysBad.map(x=>x.name+' ('+(I.sysctl_errors[x.name]||'текущее '+x.current)+')').join('; ') : 'Применено';
-  const sysCls = !I.system.sysctl ? '' : sysBad.length ? 'bad' : 'ok';
-  const ver=h('span',{},I.telemt.version||'неизвестна'); const latest=h('div',{class:'sub'},'');
-  const updBtn=h('button',{onclick:async()=>{ updBtn.disabled=true; updBtn.textContent='Обновляем…'; try{ const d=await api('POST','/api/system/update'); ver.textContent=d.version; toast('telemt обновлён до '+d.version+', инстансы перезапущены'); await refresh(); }catch(e){ toast(e.message,true);} updBtn.disabled=false; updBtn.textContent='Обновить до последней'; }},'Обновить до последней');
-  const chkBtn=h('button',{onclick:async()=>{ try{ const d=await api('GET','/api/system/latest'); latest.textContent='Последняя версия на GitHub: '+d.latest+(d.latest===I.telemt.version?' — у вас актуальная':''); }catch(e){ toast(e.message,true);} }},'Проверить версию');
-  const o=h('input',{type:'password',autocomplete:'current-password',placeholder:'текущий'}); const n=h('input',{type:'password',autocomplete:'new-password',placeholder:'новый, от 8 символов'});
-  layer.append(h('div',{class:'dialog',style:'width:min(560px,94vw)',role:'dialog'}, h('h2',{},'Система'),
-    h('h3',{style:'font-size:15px;margin:16px 0 8px'},'Адрес в ссылках'),
-    h('label',{},'Домен или IP сервера',host),
-    h('div',{class:'hint'},'Пусто — автоопределённый IP'+(S.settings.detected_host?' ('+S.settings.detected_host+')':'')+'. Сохранение перезапускает все инстансы.'),
-    h('button',{onclick:()=>act(async()=>{await api('PUT','/api/settings',{public_host:host.value});layer.remove();},'Сохранено')},'Сохранить адрес'),
-    h('h3',{style:'font-size:15px;margin:22px 0 8px'},'Сеть и файрвол хоста'),
-    sc.el, h('div',{class:'sub',style:'margin:-6px 0 12px 24px'},led(sysCls),sysTxt),
-    fc.el, h('div',{class:'sub',style:'margin:-6px 0 12px 24px'},led(fwCls),fwTxt),
-    rc.el, I.firewall.rate_error && h('div',{class:'sub',style:'margin:-6px 0 8px 24px;color:var(--warn)'},'Ограничение недоступно: '+I.firewall.rate_error),
-    h('div',{class:'hint',style:'margin-left:24px'},'Если много клиентов сидит за одним IP (операторский NAT), ограничение может мешать — тогда выключите его.'),
-    h('div',{class:'hint'},'Правила живут в отдельной цепочке TELEMT_PANEL и не трогают UFW. Панель проверяет их каждые 30 секунд. Порты также нужно открыть в облачном файрволе хостера, если он есть.'),
-    h('button',{class:'primary',onclick:saveSys},'Применить'),
-    h('h3',{style:'font-size:15px;margin:22px 0 8px'},'telemt'),
-    h('div',{},'Установлена версия: ',ver,I.telemt.custom?' (обновлена из панели)':' (из образа)'), latest,
-    h('div',{class:'row',style:'margin-top:8px'},chkBtn,updBtn),
-    h('h3',{style:'font-size:15px;margin:22px 0 8px'},'Пароль панели'),
-    I.password_from_env ? h('div',{class:'hint'},'Пароль задан переменной PANEL_PASSWORD в .env. Измените его там и перезапустите контейнер.') :
-      h('div',{}, h('div',{class:'row',style:'flex-wrap:nowrap'},o,n), h('button',{style:'margin-top:8px',onclick:()=>act(async()=>{await api('PUT','/api/password',{old:o.value,new:n.value});o.value=n.value='';},'Пароль изменён')},'Сменить пароль')),
-    h('div',{class:'row',style:'margin-top:22px;justify-content:flex-end'},h('button',{onclick:()=>layer.remove()},'Закрыть'))));
+function systemDialog(){
+  const st = S.settings || {};
+  const host = h('input',{value:st.public_host||'', placeholder:'proxy.example.com'});
+  const email = h('input',{value:st.acme_email||'', placeholder:'you@example.com'});
+  const sc = h('input',{type:'checkbox',checked:!!S.system?.sysctl});
+  const fw = h('input',{type:'checkbox',checked:!!S.system?.firewall});
+  const rl = h('input',{type:'checkbox',checked:!!S.system?.rate_limit});
+  // sites list
+  const sitesBox = h('div',{});
+  function renderSites(){
+    sitesBox.replaceChildren();
+    for(const s of (S.sites||[])){
+      sitesBox.append(h('div',{class:'user'},
+        h('div',{class:'row'},
+          h('b',{style:'flex:1'},s.id),
+          h('span',{class:'hint',style:'margin:0'}, s.files+' файлов · '+(s.running?'up':'down'))
+        ),
+        h('div',{class:'row'},
+          h('button',{onclick:()=>uploadSite(s.id)},'Загрузить HTML/ZIP'),
+          s.id!=='default' && h('button',{class:'danger',onclick:()=>confirm('Удалить сайт?')&&act(()=>api('DELETE','/api/sites/'+s.id),'Удалён')},'Удалить')
+        )
+      ));
+    }
+  }
+  renderSites();
+  const newId = h('input',{placeholder:'имя сайта, например blog'});
+  const layer = h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
+    h('div',{class:'dialog',style:'width:min(560px,94vw)'},
+      h('h2',{},'Система'),
+      h('label',{},'Адрес в ссылках (домен)', host),
+      h('label',{},'Email для Let’s Encrypt (Caddy)', email),
+      h('div',{class:'row',style:'margin-bottom:12px'},
+        h('button',{class:'primary',onclick:()=>act(async()=>{
+          await api('PUT','/api/settings',{public_host:host.value, acme_email:email.value, default_site:'default'});
+        },'Сохранено')},'Сохранить домен'),
+      ),
+      h('h3',{style:'margin:18px 0 8px;font-size:15px'},'Сайты-прикрытия'),
+      h('p',{class:'hint'},'Статика для decoy. WEB без правильной ссылки отдаёт этот сайт.'),
+      sitesBox,
+      h('div',{class:'row'}, newId, h('button',{onclick:()=>newId.value&&act(()=>api('POST','/api/sites',{id:newId.value.trim()}),'Сайт создан')},'Создать')),
+      h('h3',{style:'margin:18px 0 8px;font-size:15px'},'Сеть хоста'),
+      h('label',{class:'inline'},sc,'TCP keepalive + BBR'),
+      h('label',{class:'inline'},fw,'Файрвол TELEMT_PANEL'),
+      h('label',{class:'inline'},rl,'Лимит 1 SYN/сек на IP'),
+      h('div',{class:'row',style:'margin-top:8px'},
+        h('button',{onclick:()=>act(async()=>{
+          await api('PUT','/api/system',{sysctl:sc.checked, firewall:fw.checked, rate_limit:rl.checked});
+        },'Сеть обновлена')},'Применить сеть'),
+        h('button',{onclick:()=>{layer.remove(); caddyDialog();}},'Caddy →')
+      ),
+      h('div',{class:'row',style:'margin-top:14px'},
+        h('button',{onclick:()=>act(()=>api('POST','/api/system/update'),'telemt обновлён')},'Обновить telemt'),
+        h('button',{onclick:()=>layer.remove()},'Закрыть')
+      )
+    )
+  );
+  document.body.append(layer);
+}
+
+function uploadSite(siteId){
+  const inp = h('input',{type:'file',accept:'.html,.htm,.zip,text/html,application/zip',style:'display:none'});
+  inp.onchange = async()=>{
+    const f = inp.files?.[0]; if(!f) return;
+    const fd = new FormData(); fd.append('file', f);
+    try{
+      const r = await fetch('/api/sites/'+encodeURIComponent(siteId)+'/upload',{method:'POST', body:fd, headers:{'X-Requested-With':'panel'}});
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.detail||('Ошибка '+r.status));
+      toast('Загружено'); await refresh();
+    }catch(e){ toast(e.message,true); }
+  };
+  document.body.append(inp); inp.click(); inp.remove();
+}
+
+function caddyDialog(){
+  const c = S.caddy || {};
+  const pre = h('pre',{class:'cfg'}, c.preview || '# нет конфига');
+  const layer = h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
+    h('div',{class:'dialog',style:'width:min(640px,96vw)'},
+      h('h2',{},'Caddy'),
+      h('p',{class:'hint'},'Панель пишет Caddyfile в data/caddy/. Caddy на хосте должен использовать этот файл.'),
+      h('div',{class:'row',style:'margin-bottom:10px'},
+        h('span',{class:'pill'}, c.port_443_open?'порт 443 слушается':'443 молчит'),
+        h('span',{class:'pill'}, c.binary?'caddy в PATH':'нет caddy'),
+        h('span',{class:'spacer'}),
+        h('button',{onclick:()=>copy(c.preview||'')},'Копировать'),
+        h('button',{class:'primary',onclick:()=>act(()=>api('POST','/api/caddy/reload'),'reload')},'Reload / Start')
+      ),
+      pre,
+      h('div',{class:'steps',style:'margin-top:14px'},
+        h('div',{class:'step'}, h('div',{class:'n'},'1'), h('div',{},h('b',{},'Установка Caddy на хост'), h('div',{class:'hint',style:'margin:4px 0 0'},'https://caddyserver.com/docs/install — один раз'))),
+        h('div',{class:'step'}, h('div',{class:'n'},'2'), h('div',{},h('b',{},'Запуск'), h('div',{class:'mono',style:'margin-top:6px'},'caddy run --config /path/to/data/caddy/Caddyfile'))),
+        h('div',{class:'step'}, h('div',{class:'n'},'3'), h('div',{},h('b',{},'После изменений в панели'), h('div',{class:'hint',style:'margin:4px 0 0'},'Кнопка Reload выше — или caddy reload --config …')))
+      ),
+      h('div',{class:'row',style:'margin-top:12px'}, h('button',{onclick:()=>layer.remove()},'Закрыть'))
+    )
+  );
   document.body.append(layer);
 }
 
 async function refresh(){
-  try{ S = await api('GET','/api/state'); if (!document.getElementById('drawer-layer') || tab!=='cfg') render(); }catch(e){ if(e.message!=='login') console.error(e); }
+  S = await api('GET','/api/state');
+  // system flags may live under different key — tolerate
+  if(!S.system) S.system = {sysctl:true,firewall:true,rate_limit:true};
+  render();
 }
 async function start(){
-  await refresh(); clearInterval(poll);
-  poll = setInterval(()=>{ if (!document.querySelector('.dialog') && tab!=='cfg' && tab!=='diag') refresh(); }, 4000);
+  try{ await refresh(); poll = setInterval(()=>{ refresh().catch(()=>{}); }, 5000); }
+  catch(e){ if(e.message!=='login') showLogin(); }
 }
-api('GET','/api/state').then(()=>start()).catch(()=>{});
+start();
 </script>
 </body>
 </html>

@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
  && wget -qO- "$URL" | tar -xz -C /usr/local/bin telemt \
  && chmod +x /usr/local/bin/telemt && telemt --version
 
-RUN pip install --no-cache-dir fastapi==0.115.6 uvicorn==0.32.1
+RUN pip install --no-cache-dir fastapi==0.115.6 uvicorn==0.32.1 python-multipart==0.0.17
 WORKDIR /app
 COPY app/ /app/
 ENV DATA_DIR=/data PYTHONUNBUFFERED=1

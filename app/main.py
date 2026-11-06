@@ -25,16 +25,22 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import File, UploadFile, Form
 from pydantic import BaseModel
+
+from caddy_sites import SiteManager
 
 DATA = Path(os.getenv("DATA_DIR", "/data"))
 TELEMT_BIN = os.getenv("TELEMT_BIN", "telemt")
 PANEL_BIND = os.getenv("PANEL_BIND", "127.0.0.1")
 PANEL_PORT = int(os.getenv("PANEL_PORT", "8080"))
 API_PORT_BASE = 19100  # Control API инстансов: 127.0.0.1:19100+id
-WEB_LISTEN_BASE = 18080  # WEB-listener telemt на 127.0.0.1:18080+id (нужен nginx/Caddy снаружи)
+WEB_LISTEN_BASE = 18080  # WEB-listener telemt на 127.0.0.1:18080+id
+SITE_LISTEN_BASE = 18200
 STATIC = Path(__file__).parent / "static"
+SITES_DIR = DATA / "sites"
+CADDY_DIR = DATA / "caddy"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 PRESETS = [
@@ -58,7 +64,7 @@ class Store:
     def __init__(self):
         self.path = DATA / "state.json"
         self.lock = asyncio.Lock()
-        self.d = {"settings": {"public_host": ""}, "system": dict(DEFAULT_SYSTEM), "next_id": 1, "instances": []}
+        self.d = {"settings": {"public_host": "", "acme_email": "", "default_site": "default"}, "system": dict(DEFAULT_SYSTEM), "next_id": 1, "instances": []}
 
     def load(self):
         DATA.mkdir(parents=True, exist_ok=True)
@@ -82,6 +88,7 @@ class Store:
 
 store = Store()
 detected_host = {"value": ""}
+sites_mgr: SiteManager | None = None
 
 
 def inst_dir(i):
@@ -108,7 +115,13 @@ def render_toml(i):
         # WEB-режим: FakeTLS/ee не используется. Нужен nginx/Caddy на 443 → 127.0.0.1:web_port
         host = link_host() or "proxy.example.com"
         base = (i.get("web_base_path") or "").strip().strip("/")
-        decoy = (i.get("web_decoy_upstream") or "http://127.0.0.1:18081").strip()
+        site_id = (i.get("web_site") or store.d["settings"].get("default_site") or "default").strip() or "default"
+        if i.get("web_decoy_upstream"):
+            decoy = i["web_decoy_upstream"].strip()
+        elif sites_mgr is not None:
+            decoy = sites_mgr.upstream_url(site_id)
+        else:
+            decoy = "http://127.0.0.1:18200"
         out += [
             "", "[general.modes]", "classic = false", "secure = true", "tls = false",
             "", "[general.links]", 'show = "*"',
@@ -510,7 +523,7 @@ def public_view(i, users_api, summary, health):
     return {
         **{k: i.get(k) for k in (
             "id", "name", "port", "sni", "mss", "middle_proxy", "ad_tag",
-            "mask_host", "mask_port", "enabled", "transport", "web_base_path", "web_decoy_upstream"
+            "mask_host", "mask_port", "enabled", "transport", "web_base_path", "web_decoy_upstream", "web_site"
         )},
         "web_listen_port": web_listen_port(i) if transport == "web" else None,
         "status": {"running": r.running, "api": bool(health), "restarts": r.restarts,
@@ -585,8 +598,14 @@ async def detect_public_ip():
 
 @asynccontextmanager
 async def lifespan(_):
-    global ADMIN_PW, SESSION_KEY
+    global ADMIN_PW, SESSION_KEY, sites_mgr
     store.load()
+    store.d.setdefault("settings", {})
+    store.d["settings"].setdefault("public_host", "")
+    store.d["settings"].setdefault("acme_email", "")
+    store.d["settings"].setdefault("default_site", "default")
+    sites_mgr = SiteManager(DATA, SITE_LISTEN_BASE)
+    sites_mgr.start_all()
     ADMIN_PW, SESSION_KEY = load_secrets()
     for i in store.d["instances"]:
         if i["enabled"]:
@@ -638,7 +657,8 @@ class InstIn(BaseModel):
     enabled: bool = True
     transport: str = "tls"          # "tls" | "web"
     web_base_path: str = ""         # например "tg" или "telegram/web"
-    web_decoy_upstream: str = "http://127.0.0.1:18081"
+    web_decoy_upstream: str = ""    # пусто = сайт из панели
+    web_site: str = "default"       # id decoy-сайта
 
 
 def port_free(port):
@@ -716,7 +736,25 @@ async def state():
         users, summ, health = await asyncio.gather(tapi(i, "/v1/users"), tapi(i, "/v1/stats/summary"), tapi(i, "/v1/health"))
         return public_view(i, users, summ, health)
     insts = await asyncio.gather(*(one(i) for i in store.d["instances"]))
-    return {"settings": {**store.d["settings"], "detected_host": detected_host["value"]}, "instances": insts}
+    caddy = {}
+    sites = []
+    if sites_mgr is not None:
+        sites = sites_mgr.list_sites()
+        content = sites_mgr.generate_caddyfile(
+            store.d["settings"].get("public_host", ""),
+            store.d["settings"].get("acme_email", ""),
+            store.d["instances"],
+            WEB_LISTEN_BASE,
+        )
+        sites_mgr.write_caddyfile(content)
+        caddy = {**sites_mgr.caddy_status(), "preview": content}
+    return {
+        "settings": {**store.d["settings"], "detected_host": detected_host["value"]},
+        "system": store.d.get("system", {}),
+        "instances": insts,
+        "sites": sites,
+        "caddy": caddy,
+    }
 
 
 @app.post("/api/instances", dependencies=[Depends(require_auth)])
@@ -892,25 +930,6 @@ async def diagnostics(iid: int):
     return {"checks": checks}
 
 
-class SettingsIn(BaseModel):
-    public_host: str = ""
-
-
-@app.put("/api/settings", dependencies=[Depends(require_auth)])
-async def put_settings(body: SettingsIn):
-    h = body.public_host.strip()
-    if h and not (HOST_RE.match(h)):
-        raise HTTPException(400, "Укажите домен или IPv4")
-    async with store.lock:
-        store.d["settings"]["public_host"] = h
-        store.save()
-    for i in store.d["instances"]:
-        write_config(i)  # public_host входит в конфиг — применяем рестартом
-        await restart_instance(i)
-    return {"ok": True}
-
-
-
 @app.get("/api/system", dependencies=[Depends(require_auth)])
 async def system_info():
     s = store.d["system"]
@@ -981,6 +1000,170 @@ def change_password(body: PwIn, response: Response):
     ts = int(time.time())
     response.set_cookie("tp_session", f"{ts}.{sign(ts)}", max_age=SESSION_TTL, httponly=True, samesite="strict")
     return {"ok": True}
+
+
+
+# ---------------------------------------------------------------- Caddy + сайты
+class SettingsIn(BaseModel):
+    public_host: str = ""
+    acme_email: str = ""
+    default_site: str = "default"
+
+
+@app.put("/api/settings", dependencies=[Depends(require_auth)])
+async def put_settings(body: SettingsIn):
+    host = body.public_host.strip().lower()
+    if host and not HOST_RE.match(host) and not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+        raise HTTPException(400, "Некорректный public_host")
+    async with store.lock:
+        store.d["settings"]["public_host"] = host
+        store.d["settings"]["acme_email"] = body.acme_email.strip()
+        store.d["settings"]["default_site"] = (body.default_site or "default").strip() or "default"
+        store.save()
+    for i in store.d["instances"]:
+        if i.get("enabled"):
+            write_config(i)
+            if (i.get("transport") or "tls") == "web":
+                await restart_instance(i)
+    if sites_mgr:
+        content = sites_mgr.generate_caddyfile(
+            store.d["settings"].get("public_host", ""),
+            store.d["settings"].get("acme_email", ""),
+            store.d["instances"], WEB_LISTEN_BASE,
+        )
+        sites_mgr.write_caddyfile(content)
+    return {"ok": True}
+
+
+@app.get("/api/caddy", dependencies=[Depends(require_auth)])
+def get_caddy():
+    if not sites_mgr:
+        raise HTTPException(503, "sites not ready")
+    content = sites_mgr.generate_caddyfile(
+        store.d["settings"].get("public_host", ""),
+        store.d["settings"].get("acme_email", ""),
+        store.d["instances"], WEB_LISTEN_BASE,
+    )
+    path = sites_mgr.write_caddyfile(content)
+    st = sites_mgr.caddy_status()
+    return {**st, "preview": content, "path": str(path)}
+
+
+@app.post("/api/caddy/reload", dependencies=[Depends(require_auth)])
+def reload_caddy():
+    if not sites_mgr:
+        raise HTTPException(503, "sites not ready")
+    content = sites_mgr.generate_caddyfile(
+        store.d["settings"].get("public_host", ""),
+        store.d["settings"].get("acme_email", ""),
+        store.d["instances"], WEB_LISTEN_BASE,
+    )
+    sites_mgr.write_caddyfile(content)
+    ok, msg = sites_mgr.try_reload()
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"ok": True, "detail": msg}
+
+
+@app.get("/api/sites", dependencies=[Depends(require_auth)])
+def list_sites():
+    if not sites_mgr:
+        return []
+    return sites_mgr.list_sites()
+
+
+@app.post("/api/sites", dependencies=[Depends(require_auth)])
+async def create_site(request: Request):
+    body = await request.json()
+    site_id = (body.get("id") or "").strip()
+    if not sites_mgr:
+        raise HTTPException(503, "sites not ready")
+    try:
+        sites_mgr.ensure_site(site_id)
+        sites_mgr.start_site(site_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "id": site_id}
+
+
+@app.delete("/api/sites/{site_id}", dependencies=[Depends(require_auth)])
+def delete_site(site_id: str):
+    if not sites_mgr:
+        raise HTTPException(503, "sites not ready")
+    try:
+        sites_mgr.delete_site(site_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/sites/{site_id}/upload", dependencies=[Depends(require_auth)])
+async def upload_site(site_id: str, file: UploadFile = File(...)):
+    if not sites_mgr:
+        raise HTTPException(503, "sites not ready")
+    data = await file.read()
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(400, "Файл больше 15 МБ")
+    try:
+        url = sites_mgr.save_upload(site_id, file.filename or "index.html", data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # refresh web instances using this site
+    for i in store.d["instances"]:
+        if (i.get("transport") or "tls") == "web" and (i.get("web_site") or "default") == site_id:
+            write_config(i)
+    return {"ok": True, "upstream": url, "site": site_id}
+
+
+class QuickWebIn(BaseModel):
+    name: str = ""
+    base_path: str = ""
+    site: str = "default"
+
+
+@app.post("/api/instances/web", dependencies=[Depends(require_auth)])
+async def create_web_quick(body: QuickWebIn):
+    """Один клик: WEB-инстанс на public_host."""
+    if not link_host():
+        raise HTTPException(400, "Сначала укажите домен в Системе → Адрес в ссылках")
+    site = (body.site or "default").strip() or "default"
+    if sites_mgr:
+        sites_mgr.ensure_site(site)
+        sites_mgr.start_site(site)
+    inst_body = InstIn(
+        name=body.name or f"WEB {link_host()}",
+        transport="web",
+        port=443,
+        sni=link_host(),
+        web_base_path=(body.base_path or "").strip().strip("/"),
+        web_site=site,
+        enabled=True,
+    )
+    validate(inst_body)
+    async with store.lock:
+        iid = store.d["next_id"]
+        store.d["next_id"] += 1
+        inst = {
+            **inst_body.model_dump(),
+            "id": iid,
+            "name": inst_body.name.strip()[:40] or f"web:{link_host()}",
+            "api_token": secrets.token_hex(16),
+            "users": [{"name": "user1", "secret": secrets.token_hex(16), "enabled": True}],
+        }
+        store.d["instances"].append(inst)
+        store.save()
+    await restart_instance(inst)
+    await host_reconcile()
+    if sites_mgr:
+        content = sites_mgr.generate_caddyfile(
+            store.d["settings"].get("public_host", ""),
+            store.d["settings"].get("acme_email", ""),
+            store.d["instances"], WEB_LISTEN_BASE,
+        )
+        sites_mgr.write_caddyfile(content)
+    return {"id": iid}
+
+
 
 
 @app.get("/")
