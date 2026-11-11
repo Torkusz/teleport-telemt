@@ -259,6 +259,7 @@ function render(){
     h('button',{onclick:()=>systemDialog()},'Система'),
     h('button',{onclick:()=>webWizard()},'WEB-прокси'),
     h('button',{onclick:()=>instanceDialog()},'+ FakeTLS'),
+    h('button',{onclick:()=>cascadeHelp()},'Каскад / exit'),
     h('button',{class:'ghost',onclick:()=>act(()=>api('POST','/api/logout'),null).then(showLogin)},'Выйти')
   ));
 
@@ -284,13 +285,14 @@ function render(){
         h('div',{class:'row'},
           h('span',{}, h('span',{class:'led '+cls}), txt),
           h('span',{class:'spacer'}),
+          i.cascade_active ? h('span',{class:'pill web'},'каскад') : null,
           h('span',{class:'pill '+(isWeb?'web':'tls')}, isWeb?'WEB':'FakeTLS')
         ),
         h('div',{class:'port',style:'margin-top:10px'}, isWeb ? '443' : i.port),
         h('div',{class:'meta'}, i.name),
         h('div',{class:'meta'}, isWeb
-          ? ((i.web_base_path?('/'+i.web_base_path+' · '):'')+'loopback '+(i.web_listen_port||'?'))
-          : (i.sni+' · MSS '+(i.mss||'авто'))),
+          ? ((i.web_base_path?('/'+i.web_base_path+' · '):'')+(i.cascade_active?('exit '+i.upstream_host+' · '):'')+'loopback '+(i.web_listen_port||'?'))
+          : ((i.cascade_active?('exit '+i.upstream_host+' · '):'')+i.sni+' · MSS '+(i.mss||'авто'))),
         h('div',{class:'row',style:'margin-top:12px'},
           h('span',{class:'meta'},'онлайн '+conns),
           h('span',{class:'spacer'}),
@@ -413,7 +415,7 @@ function cfgTab(body,i){
 }
 
 function formFields(i){
-  const v = i||{port:443,sni:'www.cloudflare.com',mss:'tspu',middle_proxy:false,ad_tag:'',mask_host:'',mask_port:443,enabled:true,name:'',transport:'tls',web_base_path:'',web_site:'default'};
+  const v = i||{port:443,sni:'www.cloudflare.com',mss:'tspu',middle_proxy:false,ad_tag:'',mask_host:'',mask_port:443,enabled:true,name:'',transport:'tls',web_base_path:'',web_site:'default',cascade_enabled:false,upstream_type:'socks5',upstream_host:'',upstream_port:1080,upstream_user:'',upstream_pass:''};
   const name=h('input',{value:v.name||'',placeholder:'необязательно',maxlength:40});
   const transport=h('select',{}, h('option',{value:'tls'},'FakeTLS (ee)'), h('option',{value:'web'},'WEB (tg://webproxy)'));
   transport.value = v.transport || 'tls';
@@ -433,6 +435,27 @@ function formFields(i){
   const mh=h('input',{value:v.mask_host||'',placeholder:'пусто = SNI'});
   const mp=h('input',{type:'number',value:v.mask_port||443});
   const en=h('input',{type:'checkbox',checked:v.enabled!==false});
+  // cascade
+  const cas=h('input',{type:'checkbox',checked:!!v.cascade_enabled});
+  const uh=h('input',{value:v.upstream_host||'',placeholder:'IP зарубежного VPS'});
+  const up=h('input',{type:'number',min:1,max:65535,value:v.upstream_port||1080});
+  const uu=h('input',{value:v.upstream_user||'',placeholder:'telemt'});
+  const uw=h('input',{value:v.upstream_pass||'',placeholder:'пароль SOCKS'});
+  const cascadeBox=h('div',{style:'margin-top:10px;padding:12px;border:1px solid var(--stroke);border-radius:var(--r2);background:var(--soft)'},
+    h('label',{class:'inline'},cas,'Каскад: РФ → зарубежный SOCKS5'),
+    h('p',{class:'hint'},'Клиенты ходят на этот сервер (WEB). До Telegram трафик уходит через exit. Ссылка не меняется при смене exit.'),
+    h('div',{class:'grid two'},
+      h('label',{},'Exit host (IP)',uh),
+      h('label',{},'Exit port',up),
+      h('label',{},'SOCKS user',uu),
+      h('label',{},'SOCKS pass',uw)
+    ),
+    h('div',{class:'row',style:'margin-top:6px'},
+      h('button',{type:'button',onclick:()=>cascadeHelp(v.id)},'Скрипт для зарубежного VPS')
+    )
+  );
+  const syncCas=()=>{ const on=cas.checked; uh.disabled=up.disabled=uu.disabled=uw.disabled=!on; };
+  cas.addEventListener('change',syncCas); syncCas();
   const tlsBox=h('div',{}, h('label',{},'Порт',port), h('label',{},'SNI',sni),
     h('label',{},'ClientHello MSS',mssSel,mssNum),
     h('details',{}, h('summary',{style:'cursor:pointer;color:var(--muted);margin-bottom:8px'},'Дополнительно'),
@@ -450,6 +473,7 @@ function formFields(i){
     h('label',{},'Название',name),
     h('label',{},'Тип',transport),
     tlsBox, webBox,
+    cascadeBox,
     h('label',{class:'inline'},en,'Включён')
   );
   return {el, get:()=>({
@@ -457,8 +481,39 @@ function formFields(i){
     mss:mssSel.value==='custom'?String(mssNum.value):mssSel.value,
     middle_proxy:mm.checked, ad_tag:ad.value.trim(), mask_host:mh.value.trim(), mask_port:+mp.value||443,
     enabled:en.checked, transport:transport.value,
-    web_base_path:basePath.value.trim(), web_site:siteSel.value, web_decoy_upstream:''
+    web_base_path:basePath.value.trim(), web_site:siteSel.value, web_decoy_upstream:'',
+    cascade_enabled:cas.checked, upstream_type:'socks5',
+    upstream_host:uh.value.trim(), upstream_port:+up.value||1080,
+    upstream_user:uu.value.trim(), upstream_pass:uw.value
   })};
+}
+
+async function cascadeHelp(iid){
+  try{
+    let data;
+    if(iid){
+      data = await api('GET', `/api/instances/${iid}/cascade/script`);
+    } else {
+      data = await api('POST','/api/cascade/exit-script',{upstream_port:1080});
+    }
+    const pre = h('pre',{class:'log',style:'max-height:280px;white-space:pre-wrap'}, data.script);
+    const layer = h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
+      h('div',{class:'dialog',style:'width:min(640px,96vw)'},
+        h('h2',{},'Развёртка exit (зарубежный VPS)'),
+        h('p',{class:'hint'},'1) Скопируйте скрипт на зарубежный сервер и выполните от root. 2) IP из вывода впишите в «Exit host». 3) Сохраните инстанс. Ссылка WEB для клиентов не меняется.'),
+        h('div',{class:'mono',style:'margin-bottom:8px'},
+          `user=${data.upstream_user}  pass=${data.upstream_pass}  port=${data.upstream_port}`
+        ),
+        pre,
+        h('div',{class:'row',style:'margin-top:12px'},
+          h('button',{class:'primary',onclick:()=>copy(data.script).then(()=>toast('Скрипт скопирован'))},'Копировать скрипт'),
+          h('button',{onclick:()=>copy(`${data.upstream_user}:${data.upstream_pass}@HOST:${data.upstream_port}`)},'Копировать креды'),
+          h('button',{onclick:()=>layer.remove()},'Закрыть')
+        )
+      )
+    );
+    document.body.append(layer);
+  }catch(e){ toast(e.message||String(e), true); }
 }
 
 

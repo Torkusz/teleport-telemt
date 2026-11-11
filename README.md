@@ -86,6 +86,41 @@ server {
 > Официальный proof-of-concept от команды Desktop: [telegramdesktop/tproxy-server](https://github.com/telegramdesktop/tproxy-server).
 > Telemt — полноценная production-реализация того же контракта.
 
+## Каскад: РФ (entry) → зарубежный (exit)
+
+Клиент всегда подключается к **российскому** серверу по **WEB** (`tg://webproxy`).  
+Исходящие соединения telemt к DC Telegram идут через **SOCKS5 на зарубежном VPS**.
+
+```
+Клиент ──WEB/HTTPS──► РФ (панель + telemt + Caddy)
+                           │  SOCKS5 upstream
+                           ▼
+                      Abroad VPS (exit-setup.sh)
+                           │
+                           ▼
+                      Telegram DC
+```
+
+### Как настроить
+
+1. На **РФ** поднимите панель, домен, WEB-инстанс (как обычно).
+2. В панели: **Каскад / exit** (или в карточке инстанса → Настройки → Каскад) → **Скрипт для зарубежного VPS** → скопируйте.
+3. На **зарубежном** VPS (root):
+
+```bash
+bash exit-setup.sh          # или вставьте скрипт из панели
+# опционально: bash exit-setup.sh 1080 telemt MySecret
+```
+
+4. Из вывода скрипта возьмите `upstream_host / port / user / pass`.
+5. В панели включите **Каскад**, вставьте значения, **Сохранить**.
+6. Ссылка `tg://webproxy?...` **не меняется**. Меняете только exit — клиентам ничего не шлёте.
+
+Смена зарубежного сервера: новый VPS → `exit-setup.sh` → обновить host/pass в панели → Save.  
+При каскаде `use_middle_proxy` и ad_tag отключаются (нужен прямой путь через ваш SOCKS).
+
+Файлы: `exit-setup.sh` в корне репозитория; API `POST /api/cascade/exit-script`, `GET /api/instances/{id}/cascade/script`.
+
 ## Рекомендации по обходам (ноябрь 2026)
 
 | Приоритет | Что использовать | Когда |

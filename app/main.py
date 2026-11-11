@@ -103,13 +103,49 @@ def web_listen_port(i):
     return WEB_LISTEN_BASE + int(i["id"])
 
 
+def cascade_on(i):
+    """Каскад: исходящий трафик к DC Telegram через SOCKS5 на зарубежном сервере."""
+    return bool(i.get("cascade_enabled")) and bool((i.get("upstream_host") or "").strip())
+
+
+def render_upstreams(i):
+    """Блок [[upstreams]] для каскада. При cascade middle-proxy отключается."""
+    q = json.dumps
+    if not cascade_on(i):
+        return []
+    host = (i.get("upstream_host") or "").strip()
+    port = int(i.get("upstream_port") or 1080)
+    user = (i.get("upstream_user") or "").strip()
+    password = (i.get("upstream_pass") or "").strip()
+    utype = (i.get("upstream_type") or "socks5").lower()
+    if utype not in ("socks5", "socks4"):
+        utype = "socks5"
+    lines = [
+        "",
+        "# --- cascade: exit SOCKS on foreign VPS ---",
+        "[[upstreams]]",
+        f'type = {q(utype)}',
+        f'address = {q(f"{host}:{port}")}',
+        "weight = 10",
+        "enabled = true",
+    ]
+    if user:
+        lines.append(f"username = {q(user)}")
+    if password:
+        lines.append(f"password = {q(password)}")
+    return lines
+
+
 def render_toml(i):
     q = json.dumps
     transport = i.get("transport") or "tls"
-    mm = bool(i["middle_proxy"] or i["ad_tag"])
+    # Каскад несовместим с middle-proxy Telegram: исходящий путь должен идти через ваш exit
+    mm = bool(i.get("middle_proxy") or i.get("ad_tag")) and not cascade_on(i)
     out = ["[general]", "fast_mode = true", f"use_middle_proxy = {str(mm).lower()}", 'log_level = "normal"']
-    if i["ad_tag"]:
+    if i.get("ad_tag") and not cascade_on(i):
         out.append(f"ad_tag = {q(i['ad_tag'])}")
+    if cascade_on(i) and i.get("ad_tag"):
+        out.append("# ad_tag отключён: при cascade нужен use_middle_proxy = false")
 
     if transport == "web":
         # WEB-режим: FakeTLS/ee не используется. Нужен nginx/Caddy на 443 → 127.0.0.1:web_port
@@ -171,6 +207,7 @@ def render_toml(i):
         for u in i["users"]:
             if u.get("enabled", True):
                 out.append(f"{q(u['name'])} = {q(u['secret'])}")
+        out += render_upstreams(i)
         return "\n".join(out) + "\n"
 
     # --- классический FakeTLS (ee) ---
@@ -178,15 +215,15 @@ def render_toml(i):
     if link_host():
         out.append(f"public_host = {q(link_host())}")
     out += ["", "[network]", "ipv4 = true", "ipv6 = false", "prefer = 4", "", "[server]", f"port = {i['port']}"]
-    if i["mss"]:
+    if i.get("mss"):
         out.append(f"client_mss = {q(i['mss'])}")
     out += [
         "", "[server.api]", "enabled = true", f'listen = "127.0.0.1:{API_PORT_BASE + i["id"]}"',
         'whitelist = ["127.0.0.1/32"]', f"auth_header = {q(i['api_token'])}", "minimal_runtime_enabled = false",
         "", "[[server.listeners]]", 'ip = "0.0.0.0"',
-        "", "[censorship]", f"tls_domain = {q(i['sni'])}", "mask = true", f"mask_port = {i['mask_port']}",
+        "", "[censorship]", f"tls_domain = {q(i['sni'])}", "mask = true", f"mask_port = {i.get('mask_port') or 443}",
     ]
-    if i["mask_host"]:
+    if i.get("mask_host"):
         out.append(f"mask_host = {q(i['mask_host'])}")
     out += [
         "tls_emulation = true", 'tls_front_dir = "tlsfront"', 'unknown_sni_action = "reject_handshake"',
@@ -195,6 +232,7 @@ def render_toml(i):
     for u in i["users"]:
         if u.get("enabled", True):
             out.append(f"{q(u['name'])} = {q(u['secret'])}")
+    out += render_upstreams(i)
     return "\n".join(out) + "\n"
 
 
@@ -523,8 +561,10 @@ def public_view(i, users_api, summary, health):
     return {
         **{k: i.get(k) for k in (
             "id", "name", "port", "sni", "mss", "middle_proxy", "ad_tag",
-            "mask_host", "mask_port", "enabled", "transport", "web_base_path", "web_decoy_upstream", "web_site"
+            "mask_host", "mask_port", "enabled", "transport", "web_base_path", "web_decoy_upstream", "web_site",
+            "cascade_enabled", "upstream_type", "upstream_host", "upstream_port", "upstream_user", "upstream_pass",
         )},
+        "cascade_active": cascade_on(i),
         "web_listen_port": web_listen_port(i) if transport == "web" else None,
         "status": {"running": r.running, "api": bool(health), "restarts": r.restarts,
                    "uptime": int(time.time() - r.started) if r.running else 0},
@@ -659,6 +699,13 @@ class InstIn(BaseModel):
     web_base_path: str = ""         # например "tg" или "telegram/web"
     web_decoy_upstream: str = ""    # пусто = сайт из панели
     web_site: str = "default"       # id decoy-сайта
+    # --- cascade: РФ entry → abroad SOCKS exit ---
+    cascade_enabled: bool = False
+    upstream_type: str = "socks5"   # socks5 | socks4
+    upstream_host: str = ""         # IP/host зарубежного VPS
+    upstream_port: int = 1080
+    upstream_user: str = ""
+    upstream_pass: str = ""
 
 
 def port_free(port):
@@ -672,11 +719,32 @@ def port_free(port):
         s.close()
 
 
+def validate_cascade(body: InstIn):
+    ut = (body.upstream_type or "socks5").lower()
+    if ut not in ("socks5", "socks4"):
+        raise HTTPException(400, "upstream_type: socks5 или socks4")
+    body.upstream_type = ut
+    if body.cascade_enabled:
+        host = (body.upstream_host or "").strip()
+        if not host:
+            raise HTTPException(400, "Для каскада укажите upstream_host (IP зарубежного VPS)")
+        if not HOST_RE.match(host) and not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+            raise HTTPException(400, "Некорректный upstream_host")
+        if not 1 <= int(body.upstream_port or 0) <= 65535:
+            raise HTTPException(400, "upstream_port: 1–65535")
+        body.upstream_host = host
+        body.upstream_user = (body.upstream_user or "").strip()
+        body.upstream_pass = (body.upstream_pass or "").strip()
+    else:
+        body.upstream_host = (body.upstream_host or "").strip()
+
+
 def validate(body: InstIn, current=None):
     transport = (body.transport or "tls").lower()
     if transport not in ("tls", "web"):
         raise HTTPException(400, "transport: tls или web")
     body.transport = transport
+    validate_cascade(body)
 
     if transport == "web":
         # публичный порт всегда 443 (nginx), telemt слушает loopback — проверяем только private port
@@ -1001,6 +1069,150 @@ def change_password(body: PwIn, response: Response):
     response.set_cookie("tp_session", f"{ts}.{sign(ts)}", max_age=SESSION_TTL, httponly=True, samesite="strict")
     return {"ok": True}
 
+
+
+# ---------------------------------------------------------------- cascade / exit VPS
+def build_exit_script(user: str, password: str, port: int = 1080) -> str:
+    """Одноразовый скрипт для зарубежного VPS: SOCKS5 (Docker microsocks/go-socks5)."""
+    user = user or "telemt"
+    password = password or secrets.token_urlsafe(12)
+    port = int(port or 1080)
+    return f"""#!/usr/bin/env bash
+# telemt-panel: exit node (SOCKS5) for cascade
+# Run as root on a FOREIGN VPS. Client never connects here — only your RU entry does.
+set -euo pipefail
+PORT={port}
+USER_NAME={json.dumps(user)}
+PASS={json.dumps(password)}
+NAME=telemt-exit-socks
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "[*] Installing Docker..."
+  curl -fsSL https://get.docker.com | sh
+  systemctl enable --now docker || true
+fi
+
+docker rm -f "$NAME" 2>/dev/null || true
+docker run -d --name "$NAME" --restart unless-stopped \\
+  -p "${{PORT}}:1080" \\
+  -e PROXY_USER="$USER_NAME" \\
+  -e PROXY_PASSWORD="$PASS" \\
+  serjs/go-socks5-proxy
+
+# firewall (best-effort)
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow "${{PORT}}/tcp" || true
+elif command -v firewall-cmd >/dev/null 2>&1; then
+  firewall-cmd --add-port="${{PORT}}/tcp" --permanent || true
+  firewall-cmd --reload || true
+fi
+
+PUB=$(curl -4 -fsS --max-time 5 ifconfig.me 2>/dev/null || curl -4 -fsS --max-time 5 icanhazip.com 2>/dev/null || echo "YOUR_EXIT_IP")
+echo
+echo "=== EXIT READY ==="
+echo "upstream_host = $PUB"
+echo "upstream_port = $PORT"
+echo "upstream_user = $USER_NAME"
+echo "upstream_pass = $PASS"
+echo
+echo "В панели (инстанс → Каскад) вставьте эти значения и сохраните."
+echo "Ссылка tg://webproxy для клиентов НЕ меняется — только exit."
+"""
+
+
+class ExitGenIn(BaseModel):
+    upstream_port: int = 1080
+    upstream_user: str = ""
+    upstream_pass: str = ""
+
+
+@app.post("/api/cascade/exit-script", dependencies=[Depends(require_auth)])
+def cascade_exit_script(body: ExitGenIn):
+    """Скрипт развёртки SOCKS5 на зарубежном VPS + готовые креды."""
+    user = (body.upstream_user or "").strip() or "telemt"
+    password = (body.upstream_pass or "").strip() or secrets.token_urlsafe(14)
+    port = int(body.upstream_port or 1080)
+    if not 1 <= port <= 65535:
+        raise HTTPException(400, "port 1–65535")
+    script = build_exit_script(user, password, port)
+    return {
+        "script": script,
+        "upstream_type": "socks5",
+        "upstream_port": port,
+        "upstream_user": user,
+        "upstream_pass": password,
+        "hint": "На зарубежном VPS: скопируйте скрипт → bash. Затем IP из вывода впишите в каскад инстанса.",
+    }
+
+
+@app.post("/api/instances/{iid}/cascade", dependencies=[Depends(require_auth)])
+async def set_cascade(iid: int, body: InstIn):
+    """Включить/обновить каскад у инстанса (остальные поля можно не трогать)."""
+    inst = store.get(iid)
+    # merge only cascade fields onto current instance snapshot
+    merged = InstIn(
+        name=inst.get("name", ""),
+        port=inst.get("port", 443),
+        sni=inst.get("sni", "www.cloudflare.com"),
+        mss=inst.get("mss", "tspu"),
+        middle_proxy=bool(inst.get("middle_proxy")),
+        ad_tag=inst.get("ad_tag", ""),
+        mask_host=inst.get("mask_host", ""),
+        mask_port=int(inst.get("mask_port") or 443),
+        enabled=bool(inst.get("enabled", True)),
+        transport=inst.get("transport") or "tls",
+        web_base_path=inst.get("web_base_path") or "",
+        web_decoy_upstream=inst.get("web_decoy_upstream") or "",
+        web_site=inst.get("web_site") or "default",
+        cascade_enabled=body.cascade_enabled,
+        upstream_type=body.upstream_type or "socks5",
+        upstream_host=body.upstream_host or "",
+        upstream_port=int(body.upstream_port or 1080),
+        upstream_user=body.upstream_user or "",
+        upstream_pass=body.upstream_pass or "",
+    )
+    validate(merged, inst)
+    async with store.lock:
+        inst["cascade_enabled"] = merged.cascade_enabled
+        inst["upstream_type"] = merged.upstream_type
+        inst["upstream_host"] = merged.upstream_host
+        inst["upstream_port"] = merged.upstream_port
+        inst["upstream_user"] = merged.upstream_user
+        inst["upstream_pass"] = merged.upstream_pass
+        if merged.cascade_enabled:
+            # middle-proxy / ad_tag ломают custom upstream
+            inst["middle_proxy"] = False
+        store.save()
+    await restart_instance(inst)
+    return {"ok": True, "cascade_active": cascade_on(inst)}
+
+
+@app.get("/api/instances/{iid}/cascade/script", dependencies=[Depends(require_auth)])
+def instance_exit_script(iid: int):
+    """Скрипт exit с уже сохранёнными (или сгенерированными) кредами инстанса."""
+    inst = store.get(iid)
+    user = (inst.get("upstream_user") or "").strip() or "telemt"
+    password = (inst.get("upstream_pass") or "").strip() or secrets.token_urlsafe(14)
+    port = int(inst.get("upstream_port") or 1080)
+    # persist generated secrets if empty so panel and script match
+    changed = False
+    if not (inst.get("upstream_user") or "").strip():
+        inst["upstream_user"] = user
+        changed = True
+    if not (inst.get("upstream_pass") or "").strip():
+        inst["upstream_pass"] = password
+        changed = True
+    if changed:
+        store.save()
+    return {
+        "script": build_exit_script(user, password, port),
+        "upstream_type": inst.get("upstream_type") or "socks5",
+        "upstream_port": port,
+        "upstream_user": user,
+        "upstream_pass": password,
+        "upstream_host": inst.get("upstream_host") or "",
+        "cascade_enabled": bool(inst.get("cascade_enabled")),
+    }
 
 
 # ---------------------------------------------------------------- Caddy + сайты
