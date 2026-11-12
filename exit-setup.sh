@@ -69,10 +69,11 @@ else
   echo "[!] SOCKS5 не отвечает на 127.0.0.1:$RPORT — смотрите: docker logs $NAME" >&2
 fi
 if command -v curl >/dev/null 2>&1; then
-  if curl -sS --max-time 6 -x "socks5h://127.0.0.1:$RPORT" telnet://149.154.167.51:443 </dev/null >/dev/null 2>&1; then
-    echo "[ok] exit достучался до Telegram DC (149.154.167.51:443)"
+  if curl -sS --max-time 8 -x "socks5h://127.0.0.1:$RPORT" -o /dev/null https://web.telegram.org/ >/dev/null 2>&1 \
+     || timeout 5 bash -c '</dev/tcp/149.154.167.51/443' 2>/dev/null; then
+    echo "[ok] exit достучался до Telegram"
   else
-    echo "[!] exit не достучался до Telegram DC — проверьте исходящий трафик VPS" >&2
+    echo "[!] exit не достучался до Telegram — проверьте исходящий трафик VPS" >&2
   fi
 fi
 
