@@ -180,13 +180,25 @@ class SiteManager:
         # restart server to pick up files (SimpleHTTPRequestHandler reads live)
         return self.upstream_url(site_id)
 
-    def generate_caddyfile(self, public_host: str, email: str, web_instances: list[dict], web_listen_base: int) -> str:
+    def generate_caddyfile(self, public_host: str, email: str, web_instances: list[dict], web_listen_base: int,
+                           admin_addr: str | None = None) -> str:
+        """admin_addr задан, когда Caddy запускает сама панель: тогда в глобальные опции добавляются
+        admin-сокет (для reload), читаемый консольный лог и отключение HTTP/3 (UDP 443 не нужен)."""
         host = (public_host or "").strip().lower()
         email = (email or "").strip()
         lines = []
         # Global options MUST be inside a top-level { } block
+        glob = []
         if email and "@" in email:
-            lines += ["{", f"\temail {email}", "}", ""]
+            glob.append(f"\temail {email}")
+        if admin_addr:
+            glob += [
+                f"\tadmin {admin_addr}",
+                "\tservers {", "\t\tprotocols h1 h2", "\t}",
+                "\tlog {", "\t\tformat console", "\t\tlevel INFO", "\t}",
+            ]
+        if glob:
+            lines += ["{", *glob, "}", ""]
         if not host:
             lines += ["# Укажите домен в Системе → Адрес в ссылках", ""]
             return "\n".join(lines)
@@ -244,48 +256,40 @@ class SiteManager:
         return path
 
     def caddy_status(self) -> dict:
+        """Дешёвый статус (вызывается при каждом опросе UI): без запуска процессов."""
         path = self.caddy_dir / "Caddyfile"
         bin_path = shutil.which("caddy")
-        running = False
-        version = ""
-        if bin_path:
+        import socket
+
+        def listening(port):
             try:
-                version = subprocess.run(
-                    [bin_path, "version"], capture_output=True, text=True, timeout=5
-                ).stdout.strip().split("\n")[0]
-            except Exception:
-                pass
-            try:
-                r = subprocess.run(
-                    [bin_path, "validate", "--config", str(path)],
-                    capture_output=True, text=True, timeout=8,
-                )
-                valid = r.returncode == 0
-                valid_msg = (r.stderr or r.stdout or "").strip()[:300]
-            except Exception as e:
-                valid = False
-                valid_msg = str(e)
-        else:
-            valid = path.exists()
-            valid_msg = "caddy не найден в PATH (установите на хост)"
-        # detect listening 443
-        try:
-            import socket
-            s = socket.socket()
-            s.settimeout(0.3)
-            running = s.connect_ex(("127.0.0.1", 443)) == 0
-            s.close()
-        except Exception:
-            pass
+                with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                    return True
+            except OSError:
+                return False
+
         return {
             "binary": bin_path or "",
-            "version": version,
             "config_path": str(path),
             "config_exists": path.exists(),
-            "valid": valid,
-            "valid_msg": valid_msg,
-            "port_443_open": running,
+            "port_443_open": listening(443),
+            "port_80_open": listening(80),
         }
+
+    def validate_caddyfile(self, env: dict | None = None) -> tuple[bool, str]:
+        bin_path = shutil.which("caddy")
+        path = self.caddy_dir / "Caddyfile"
+        if not bin_path:
+            return False, "caddy не найден в PATH"
+        try:
+            r = subprocess.run([bin_path, "validate", "--config", str(path), "--adapter", "caddyfile"],
+                               capture_output=True, text=True, timeout=30, env=env)
+            raw = (r.stderr or r.stdout or "").strip()
+            # из вывода берём строки с причиной (JSON-строки «using config from file» отбрасываем)
+            lines = [l for l in raw.splitlines() if l.strip() and not l.lstrip().startswith('{"level"')]
+            return r.returncode == 0, ("\n".join(lines) or raw)[-400:]
+        except Exception as e:  # noqa
+            return False, str(e)
 
     def try_reload(self) -> tuple[bool, str]:
         bin_path = shutil.which("caddy")

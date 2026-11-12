@@ -305,18 +305,23 @@ function render(){
 
   // Caddy strip
   const c = S.caddy || {};
+  const certOk = c.cert && c.cert.ok;
+  let caddyHint;
+  if(!c.public_host) caddyHint='Укажите домен в «Система» — Caddy поднимет сайт-прикрытие на нём и сам получит сертификат.';
+  else if(c.last_error && !c.running && c.managed) caddyHint='⚠ '+c.last_error;
+  else if(c.dns && c.dns.ok===false) caddyHint='⚠ '+(c.dns.error||('Домен указывает на '+c.dns.ips.join(', ')+', а сервер — '+(c.dns.server_ip||'?')+'. Исправьте A-запись.'));
+  else if(c.cert && !c.cert.ok) caddyHint='⚠ '+c.cert.error;
+  else if(certOk) caddyHint='https://'+c.public_host+' · сертификат: '+(c.cert.issuer||'ok')+', ещё '+c.cert.days_left+' дн.';
+  else caddyHint=c.managed?'Caddy запускается…':'Caddy внешний (CADDY_MANAGE=0): запускайте его сами.';
   main.append(h('div',{class:'glass panel',style:'margin-top:8px'},
     h('div',{class:'row'},
-      h('b',{},'Caddy / TLS'),
+      h('b',{},'Сайт и сертификат (Caddy)'),
       h('span',{class:'spacer'}),
-      h('span',{class:'pill'}, c.port_443_open ? '443 открыт' : '443 закрыт'),
-      h('button',{onclick:()=>caddyDialog()},'Настроить')
+      h('span',{class:'pill'}, !c.managed?'внешний':(c.running?'Caddy работает':'Caddy остановлен')),
+      c.public_host ? h('span',{class:'pill'}, certOk?'сертификат ✓':'нет сертификата') : null,
+      h('button',{onclick:()=>caddyDialog()},'Подробнее')
     ),
-    h('p',{class:'hint',style:'margin:10px 0 0'},
-      c.binary
-        ? ('Caddy: '+(c.version||c.binary))
-        : 'Caddy на хосте не найден — скачайте Caddyfile и запустите сами, либо установите caddy в PATH.'
-    )
+    h('p',{class:'hint',style:'margin:10px 0 0'}, caddyHint)
   ));
 
   $app.replaceChildren(root);
@@ -682,6 +687,7 @@ function systemDialog(){
       h('h2',{},'Система'),
       h('label',{},'Адрес в ссылках (домен)', host),
       h('label',{},'Email для Let’s Encrypt (Caddy)', email),
+      h('p',{class:'hint'},'После сохранения Caddy сам поднимет сайт-прикрытие на этом домене и получит сертификат. A-запись должна указывать на сервер, порты 80/443 — быть открыты.'),
       h('div',{class:'row',style:'margin-bottom:12px'},
         h('button',{class:'primary',onclick:()=>act(async()=>{
           await api('PUT','/api/settings',{public_host:host.value, acme_email:email.value, default_site:'default'});
@@ -726,25 +732,50 @@ function uploadSite(siteId){
 }
 
 function caddyDialog(){
-  const c = S.caddy || {};
-  const pre = h('pre',{class:'cfg'}, c.preview || '# нет конфига');
+  const status=h('div',{});
+  const logPre=h('pre',{class:'cfg',style:'max-height:240px;overflow:auto;display:none;white-space:pre-wrap'});
+  const pre=h('pre',{class:'cfg'}, (S.caddy||{}).preview || '# нет конфига');
+  const bad='var(--danger, #e5484d)', good='var(--ok, #30a46c)';
+  const row=(k,v,color)=>h('div',{style:'display:flex;gap:10px;margin:5px 0;align-items:baseline'},
+    h('span',{class:'hint',style:'min-width:110px;margin:0'},k),
+    h('span',{style:'flex:1;word-break:break-word'+(color?(';color:'+color):'')}, v));
+  function paint(c){
+    const rows=[];
+    rows.push(row('Caddy', !c.managed ? 'внешний (CADDY_MANAGE=0) — запускайте и перезагружайте его сами'
+      : (c.running ? ('работает · '+(c.version||'')+(c.restarts?(' · перезапусков: '+c.restarts):'')) : 'остановлен'), (c.managed&&!c.running)?bad:null));
+    rows.push(row('Домен', c.public_host || 'не задан — «Система → Адрес в ссылках»', c.public_host?null:bad));
+    if(c.dns){
+      const ips=(c.dns.ips||[]).join(', ')||'—';
+      rows.push(row('DNS', c.dns.error ? c.dns.error : (ips+(c.dns.server_ip?(' · сервер: '+c.dns.server_ip):''))+(c.dns.ok===true?' ✓':(c.dns.ok===false?' — не совпадает, исправьте A-запись':'')), c.dns.ok===false||c.dns.error?bad:(c.dns.ok?good:null)));
+    }
+    rows.push(row('Порты', '80: '+(c.port_80_open?'слушается':'закрыт')+' · 443: '+(c.port_443_open?'слушается':'закрыт'), null));
+    if(c.cert){
+      if(c.cert.ok) rows.push(row('Сертификат', (c.cert.issuer||'ok')+' · до '+new Date(c.cert.expires*1000).toLocaleDateString('ru-RU')+' (ещё '+c.cert.days_left+' дн.) ✓', good));
+      else rows.push(row('Сертификат', c.cert.error, bad));
+      if(c.cert.site) rows.push(row('Сайт-прикрытие', c.cert.site, /\s(2|3)\d\d\b/.test(c.cert.site)?good:bad));
+    }
+    if(c.last_error && c.managed) rows.push(row('Ошибка', c.last_error, bad));
+    if(c.valid===false) rows.push(row('Caddyfile', c.valid_msg||'не прошёл проверку', bad));
+    status.replaceChildren(...rows);
+  }
+  paint(S.caddy||{});
+  const sync=async()=>{ try{ await refresh(); paint(S.caddy||{}); pre.textContent=(S.caddy||{}).preview||'# нет конфига'; }catch(e){} };
   const layer = h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
-    h('div',{class:'dialog',style:'width:min(640px,96vw)'},
-      h('h2',{},'Caddy'),
-      h('p',{class:'hint'},'Панель пишет Caddyfile в data/caddy/. Caddy на хосте должен использовать этот файл.'),
-      h('div',{class:'row',style:'margin-bottom:10px'},
-        h('span',{class:'pill'}, c.port_443_open?'порт 443 слушается':'443 молчит'),
-        h('span',{class:'pill'}, c.binary?'caddy в PATH':'нет caddy'),
-        h('span',{class:'spacer'}),
-        h('button',{onclick:()=>copy(c.preview||'')},'Копировать'),
-        h('button',{class:'primary',onclick:()=>act(()=>api('POST','/api/caddy/reload'),'reload')},'Reload / Start')
+    h('div',{class:'dialog',style:'width:min(680px,96vw)'},
+      h('h2',{},'Сайт-прикрытие и сертификат'),
+      h('p',{class:'hint'},'Caddy встроен в панель: поднимает сайт на вашем домене и сам получает и продлевает сертификат Let’s Encrypt. Конфиг применяется автоматически при любых изменениях.'),
+      status,
+      h('div',{class:'row',style:'margin:12px 0;gap:8px;flex-wrap:wrap'},
+        h('button',{class:'primary',onclick:async()=>{ try{ S.caddy={...S.caddy, ...(await api('POST','/api/caddy/check'))}; paint(S.caddy); toast('Проверено'); }catch(e){ toast(e.message,true); } }},'Проверить сейчас'),
+        h('button',{onclick:async()=>{ try{ const r=await api('POST','/api/caddy/reload'); toast(r.detail||'Применено'); }catch(e){ toast(e.message,true); } await sync(); }},'Применить / перезапустить'),
+        h('button',{onclick:async()=>{ try{ const r=await api('GET','/api/caddy/log'); logPre.textContent=(r.lines||[]).join('\n')||'(лог пуст)'; logPre.style.display=''; logPre.scrollTop=logPre.scrollHeight; }catch(e){ toast(e.message,true); } }},'Лог Caddy'),
+        h('button',{onclick:()=>copy(pre.textContent)},'Копировать Caddyfile')
       ),
+      logPre,
+      h('div',{class:'hint',style:'margin:10px 0 4px'},'Что нужно для сертификата:'),
+      h('div',{class:'hint',style:'margin:0 0 8px;line-height:1.6'},
+        '1) A-запись домена указывает на IP этого сервера.  2) Порты 80 и 443 открыты (ufw и файрвол хостера) и не заняты. FakeTLS-инстанс на 443 несовместим с сайтом на том же сервере.  3) Email для Let’s Encrypt — необязательно, но желателен.'),
       pre,
-      h('div',{class:'steps',style:'margin-top:14px'},
-        h('div',{class:'step'}, h('div',{class:'n'},'1'), h('div',{},h('b',{},'Установка Caddy на хост'), h('div',{class:'hint',style:'margin:4px 0 0'},'https://caddyserver.com/docs/install — один раз'))),
-        h('div',{class:'step'}, h('div',{class:'n'},'2'), h('div',{},h('b',{},'Запуск'), h('div',{class:'mono',style:'margin-top:6px'},'caddy run --config /path/to/data/caddy/Caddyfile'))),
-        h('div',{class:'step'}, h('div',{class:'n'},'3'), h('div',{},h('b',{},'После изменений в панели'), h('div',{class:'hint',style:'margin:4px 0 0'},'Кнопка Reload выше — или caddy reload --config …')))
-      ),
       h('div',{class:'row',style:'margin-top:12px'}, h('button',{onclick:()=>layer.remove()},'Закрыть'))
     )
   );

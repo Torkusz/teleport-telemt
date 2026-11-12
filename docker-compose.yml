@@ -13,6 +13,8 @@ services:
       PANEL_PASSWORD: "${PANEL_PASSWORD:-}"   # пусто = сгенерировать и показать в логах (потом меняется в панели)
       PANEL_BIND: "${PANEL_BIND:-127.0.0.1}"  # 0.0.0.0 — открыть наружу (не рекомендуется)
       PANEL_PORT: "${PANEL_PORT:-8080}"
+      # встроенный Caddy (сайт-прикрытие + сертификат). 0 — если у вас свой Caddy/nginx на 80/443
+      CADDY_MANAGE: "${CADDY_MANAGE:-1}"
     volumes:
       - ./data:/data
       # sysctl хоста: Docker монтирует /proc/sys только на чтение, поэтому нужные файлы пробрасываем отдельно

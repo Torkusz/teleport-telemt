@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import io
 import platform
 import socket
@@ -808,6 +809,11 @@ def host_reconcile_sync():
         ports.append(i["port"])
     if has_web and 443 not in ports:
         ports.append(443)
+    # сайт-прикрытие с сертификатом: 80 (проверка домена Let's Encrypt, редирект) и 443
+    if CADDY_MANAGED and (store.d["settings"].get("public_host") or "").strip():
+        for pt in (80, 443):
+            if pt not in ports:
+                ports.append(pt)
     fw_reconcile(sysd["firewall"], ports, sysd["rate_limit"])
 
 
@@ -960,6 +966,241 @@ async def detect_public_ip():
             write_config(i)
 
 
+# ---------------------------------------------------------------- Caddy: сайт-прикрытие + сертификат
+# Caddy запускает сама панель (бинарник лежит в образе): сайт поднимается на домене из «Системы»,
+# сертификат Let's Encrypt/ZeroSSL Caddy получает и продлевает сам. CADDY_MANAGE=0 — свой Caddy на хосте.
+CADDY_MANAGED = os.getenv("CADDY_MANAGE", "1").strip().lower() not in ("0", "false", "no", "off")
+CADDY_ADMIN = os.getenv("CADDY_ADMIN", "unix//run/telemt/caddy.sock")  # только сокет внутри контейнера
+CADDY_STORAGE = DATA / "caddy-storage"       # сертификаты и ACME-аккаунт: переживают пересборку образа
+CADDY_CONFIG_HOME = DATA / "caddy-config"
+IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+
+def caddy_content():
+    return sites_mgr.generate_caddyfile(
+        store.d["settings"].get("public_host", ""), store.d["settings"].get("acme_email", ""),
+        store.d["instances"], WEB_LISTEN_BASE,
+        admin_addr=CADDY_ADMIN if CADDY_MANAGED else None,
+    )
+
+
+def caddy_env():
+    return {**os.environ, "XDG_DATA_HOME": str(CADDY_STORAGE), "XDG_CONFIG_HOME": str(CADDY_CONFIG_HOME)}
+
+
+def dns_info(host):
+    """Указывает ли A-запись домена на этот сервер (иначе Let's Encrypt не сможет подтвердить домен)."""
+    server_ip = detected_host["value"]
+    try:
+        ips = sorted({a[4][0] for a in socket.getaddrinfo(host, None, socket.AF_INET)})
+    except socket.gaierror as e:
+        return {"ok": False, "ips": [], "server_ip": server_ip, "error": f"домен не резолвится: {e}"}
+    return {"ok": (server_ip in ips) if server_ip else None, "ips": ips, "server_ip": server_ip}
+
+
+def cert_info(host):
+    """Реальный TLS-запрос к локальному Caddy с полной проверкой цепочки: сертификат публично доверенный и сайт отвечает."""
+    ctx = ssl.create_default_context()
+    try:
+        with socket.create_connection(("127.0.0.1", 443), timeout=4) as raw:
+            with ctx.wrap_socket(raw, server_hostname=host) as t:
+                c = t.getpeercert()
+                exp = int(ssl.cert_time_to_seconds(c["notAfter"]))
+                issuer = {k: v for rdn in c.get("issuer", ()) for k, v in rdn}
+                t.settimeout(4)
+                t.sendall(f"GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+                head = t.recv(300).split(b"\r\n", 1)[0].decode(errors="replace")
+                who = issuer.get("organizationName") or issuer.get("commonName", "")
+                res = {"ok": True, "issuer": who, "expires": exp, "days_left": int((exp - time.time()) // 86400), "site": head}
+                if "Local Authority" in (issuer.get("commonName", "") + who):
+                    res.update(ok=False, error="сертификат выдан внутренним CA Caddy — клиенты ему не доверяют; нужен публичный домен, указывающий на этот сервер")
+                return res
+    except ssl.SSLCertVerificationError as e:
+        return {"ok": False, "error": f"сертификат не прошёл проверку: {e.verify_message}"}
+    except ssl.SSLError:
+        return {"ok": False, "error": "сертификат ещё не выпущен или ACME не прошёл — смотрите лог Caddy"}
+    except OSError as e:
+        return {"ok": False, "error": f"Caddy не слушает 443 ({e.__class__.__name__}) — порт занят другим сервисом или Caddy не запущен"}
+
+
+class CaddyRunner:
+    def __init__(self):
+        self.proc = None
+        self.logs = deque(maxlen=400)
+        self.started = 0.0
+        self.restarts = 0
+        self.stopping = False
+        self.applied = ""      # sha256 Caddyfile, который сейчас загружен в Caddy
+        self.validated = ""    # sha256 последней проверенной версии
+        self.valid = None
+        self.valid_msg = ""
+        self.version = ""
+        self.last_error = ""
+        self.cert = None
+        self.dns = None
+        self.checked_at = 0.0
+        self.next_start = 0.0
+        self.next_reload = 0.0
+        self.lock = asyncio.Lock()
+
+    @property
+    def running(self):
+        return self.proc is not None and self.proc.returncode is None
+
+    def log(self, s):
+        self.logs.append(f"{time.strftime('%H:%M:%S')} {s}")
+
+    async def start(self):
+        CADDY_STORAGE.mkdir(parents=True, exist_ok=True)
+        CADDY_CONFIG_HOME.mkdir(parents=True, exist_ok=True)
+        if CADDY_ADMIN.startswith("unix/"):
+            Path(CADDY_ADMIN[5:]).parent.mkdir(parents=True, exist_ok=True)
+        path = sites_mgr.caddy_dir / "Caddyfile"
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.stopping = False
+        self.proc = await asyncio.create_subprocess_exec(
+            "caddy", "run", "--config", str(path), "--adapter", "caddyfile",
+            env=caddy_env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        self.applied = digest
+        self.started = time.time()
+        self.log("[panel] caddy запущен")
+        asyncio.create_task(self._read(self.proc))
+
+    async def _read(self, proc):
+        async for line in proc.stdout:
+            self.log(ANSI.sub("", line.decode(errors="replace").rstrip()))
+        code = await proc.wait()
+        if self.stopping:
+            return
+        self.restarts += 1
+        self.log(f"[panel] caddy завершился с кодом {code}, повтор через несколько секунд")
+        self.last_error = f"caddy завершился с кодом {code}: " + " | ".join(list(self.logs)[-3:])[-300:]
+        self.next_start = time.time() + (3 if time.time() - self.started > 60 else 15)
+
+    async def reload(self):
+        path = sites_mgr.caddy_dir / "Caddyfile"
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+
+        def run():
+            return subprocess.run(
+                ["caddy", "reload", "--config", str(path), "--adapter", "caddyfile", "--address", CADDY_ADMIN],
+                capture_output=True, text=True, timeout=30, env=caddy_env())
+        r = await asyncio.to_thread(run)
+        if r.returncode == 0:
+            self.applied, self.last_error = digest, ""
+            self.log("[panel] конфиг применён (reload)")
+            return True, "Caddy перезагружен"
+        msg = (r.stderr or r.stdout or "reload не удался").strip()[-400:]
+        self.last_error = msg
+        self.next_reload = time.time() + 30
+        self.log("[panel] reload не удался: " + msg)
+        return False, msg
+
+    async def stop(self):
+        self.stopping = True
+        if self.running:
+            self.proc.terminate()
+            try:
+                await asyncio.wait_for(self.proc.wait(), 10)
+            except asyncio.TimeoutError:
+                self.proc.kill()
+        self.proc = None
+
+
+caddy = CaddyRunner()
+
+
+async def caddy_apply(force=False):
+    """Пишет Caddyfile, проверяет и запускает/перезагружает Caddy. Возвращает (ok, сообщение)."""
+    async with caddy.lock:
+        content = caddy_content()
+        path = sites_mgr.caddy_dir / "Caddyfile"
+        if not path.exists() or path.read_text(encoding="utf-8") != content:
+            sites_mgr.write_caddyfile(content)
+        if not CADDY_MANAGED:
+            if force:
+                return await asyncio.to_thread(sites_mgr.try_reload)
+            return True, "Caddyfile записан (Caddy управляется вне панели)"
+        if not shutil.which("caddy"):
+            caddy.last_error = "caddy не найден в образе — пересоберите: docker compose build --no-cache && docker compose up -d"
+            return False, caddy.last_error
+        if not caddy.version:
+            def ver():
+                try:
+                    return subprocess.run(["caddy", "version"], capture_output=True, text=True, timeout=5).stdout.split()[0]
+                except Exception:  # noqa
+                    return ""
+            caddy.version = await asyncio.to_thread(ver)
+        # Не отнимаем 80/443 у FakeTLS-инстансов telemt: после перезагрузки Caddy мог бы занять порт первым
+        host_set = bool((store.d["settings"].get("public_host") or "").strip())
+        clash = [i for i in store.d["instances"]
+                 if i.get("enabled") and (i.get("transport") or "tls") != "web" and int(i.get("port") or 0) in (80, 443)]
+        if host_set and clash and not caddy.running:
+            c = clash[0]
+            caddy.last_error = (f"Caddy не запущен: порт {c['port']} занят инстансом telemt «{c.get('name') or c['id']}» (FakeTLS). "
+                                "Для сайта с сертификатом нужны 80 и 443 — переведите инстанс на другой порт или используйте WEB-режим.")
+            return False, caddy.last_error
+        if caddy.last_error.startswith("Caddy не запущен: порт"):
+            caddy.last_error = ""
+        digest = hashlib.sha256(content.encode()).hexdigest()
+        if force or digest != caddy.validated:
+            ok, msg = await asyncio.to_thread(sites_mgr.validate_caddyfile, caddy_env())
+            caddy.valid, caddy.valid_msg, caddy.validated = ok, msg, digest
+            if not ok:
+                caddy.log("[panel] Caddyfile не прошёл проверку: " + msg)
+        if caddy.valid is False:
+            return False, caddy.valid_msg or "Caddyfile не прошёл проверку"
+        if not caddy.running:
+            if not force and time.time() < caddy.next_start:
+                return False, "ожидание перед повторным запуском Caddy"
+            await caddy.start()
+            return True, "Caddy запущен"
+        if force or digest != caddy.applied:
+            if not force and time.time() < caddy.next_reload:
+                return False, "ожидание перед повторной перезагрузкой"
+            return await caddy.reload()
+        return True, "Конфиг актуален"
+
+
+async def caddy_refresh_checks():
+    host = (store.d["settings"].get("public_host") or "").strip()
+    if not host:
+        caddy.cert = caddy.dns = None
+    elif IPV4_RE.match(host):
+        caddy.dns = {"ok": None, "ips": [host], "server_ip": detected_host["value"]}
+        caddy.cert = {"ok": False, "error": "для голого IP публичный сертификат автоматически не выпускается — укажите домен"}
+    else:
+        caddy.dns = await asyncio.to_thread(dns_info, host)
+        caddy.cert = await asyncio.to_thread(cert_info, host) if (caddy.running or not CADDY_MANAGED) \
+            else {"ok": False, "error": "Caddy не запущен"}
+    caddy.checked_at = time.time()
+
+
+async def caddy_loop():
+    await asyncio.sleep(1.5)
+    while True:
+        try:
+            if sites_mgr is not None:
+                await caddy_apply()
+                if time.time() - caddy.checked_at > 30:
+                    await caddy_refresh_checks()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa
+            caddy.log(f"[panel] ошибка менеджера Caddy: {e}")
+        await asyncio.sleep(3)
+
+
+def caddy_public():
+    return {
+        "managed": CADDY_MANAGED, "running": caddy.running, "restarts": caddy.restarts, "version": caddy.version,
+        "valid": caddy.valid, "valid_msg": caddy.valid_msg, "last_error": caddy.last_error,
+        "uptime": int(time.time() - caddy.started) if caddy.running else 0,
+        "cert": caddy.cert, "dns": caddy.dns, "server_ip": detected_host["value"],
+        "public_host": store.d["settings"].get("public_host", ""),
+    }
+
+
 @asynccontextmanager
 async def lifespan(_):
     global ADMIN_PW, SESSION_KEY, sites_mgr
@@ -978,8 +1219,11 @@ async def lifespan(_):
             ensure_runner(i["id"]).start()
     asyncio.create_task(detect_public_ip())
     host_task = asyncio.create_task(host_loop())
+    caddy_task = asyncio.create_task(caddy_loop())
     yield
     host_task.cancel()
+    caddy_task.cancel()
+    await caddy.stop()
     await asyncio.gather(*(r.stop() for r in runners.values()), *(t.stop() for t in tunnels.values()))
 
 
@@ -1188,14 +1432,7 @@ async def state():
     sites = []
     if sites_mgr is not None:
         sites = sites_mgr.list_sites()
-        content = sites_mgr.generate_caddyfile(
-            store.d["settings"].get("public_host", ""),
-            store.d["settings"].get("acme_email", ""),
-            store.d["instances"],
-            WEB_LISTEN_BASE,
-        )
-        sites_mgr.write_caddyfile(content)
-        caddy = {**sites_mgr.caddy_status(), "preview": content}
+        caddy = {**sites_mgr.caddy_status(), **caddy_public(), "preview": caddy_content()}
     return {
         "settings": {**store.d["settings"], "detected_host": detected_host["value"]},
         "system": store.d.get("system", {}),
@@ -1694,12 +1931,8 @@ async def put_settings(body: SettingsIn):
             if (i.get("transport") or "tls") == "web":
                 await restart_instance(i)
     if sites_mgr:
-        content = sites_mgr.generate_caddyfile(
-            store.d["settings"].get("public_host", ""),
-            store.d["settings"].get("acme_email", ""),
-            store.d["instances"], WEB_LISTEN_BASE,
-        )
-        sites_mgr.write_caddyfile(content)
+        caddy.checked_at = 0.0  # сразу перепроверить DNS/сертификат нового домена
+        asyncio.create_task(caddy_apply())
     return {"ok": True}
 
 
@@ -1707,30 +1940,34 @@ async def put_settings(body: SettingsIn):
 def get_caddy():
     if not sites_mgr:
         raise HTTPException(503, "sites not ready")
-    content = sites_mgr.generate_caddyfile(
-        store.d["settings"].get("public_host", ""),
-        store.d["settings"].get("acme_email", ""),
-        store.d["instances"], WEB_LISTEN_BASE,
-    )
-    path = sites_mgr.write_caddyfile(content)
-    st = sites_mgr.caddy_status()
-    return {**st, "preview": content, "path": str(path)}
+    path = sites_mgr.caddy_dir / "Caddyfile"
+    return {**sites_mgr.caddy_status(), **caddy_public(), "preview": caddy_content(), "path": str(path)}
 
 
 @app.post("/api/caddy/reload", dependencies=[Depends(require_auth)])
-def reload_caddy():
+async def reload_caddy():
+    """Записать Caddyfile, проверить и (пере)запустить Caddy."""
     if not sites_mgr:
         raise HTTPException(503, "sites not ready")
-    content = sites_mgr.generate_caddyfile(
-        store.d["settings"].get("public_host", ""),
-        store.d["settings"].get("acme_email", ""),
-        store.d["instances"], WEB_LISTEN_BASE,
-    )
-    sites_mgr.write_caddyfile(content)
-    ok, msg = sites_mgr.try_reload()
+    ok, msg = await caddy_apply(force=True)
     if not ok:
         raise HTTPException(400, msg)
+    caddy.checked_at = 0.0
     return {"ok": True, "detail": msg}
+
+
+@app.post("/api/caddy/check", dependencies=[Depends(require_auth)])
+async def check_caddy():
+    """Проверить прямо сейчас: DNS домена и сертификат, который отдаёт Caddy."""
+    if not sites_mgr:
+        raise HTTPException(503, "sites not ready")
+    await caddy_refresh_checks()
+    return caddy_public()
+
+
+@app.get("/api/caddy/log", dependencies=[Depends(require_auth)])
+def caddy_log():
+    return {"lines": list(caddy.logs)[-200:]}
 
 
 @app.get("/api/sites", dependencies=[Depends(require_auth)])
@@ -1823,11 +2060,7 @@ async def create_web_quick(body: QuickWebIn):
     await restart_instance(inst)
     await host_reconcile()
     if sites_mgr:
-        content = sites_mgr.generate_caddyfile(
-            store.d["settings"].get("public_host", ""),
-            store.d["settings"].get("acme_email", ""),
-            store.d["instances"], WEB_LISTEN_BASE,
-        )
+        content = caddy_content()
         sites_mgr.write_caddyfile(content)
     return {"id": iid}
 
