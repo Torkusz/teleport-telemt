@@ -108,22 +108,50 @@ def web_listen_port(i):
     return WEB_LISTEN_BASE + int(i["id"])
 
 
+MAX_EXITS = 8
+EXIT_DEFAULTS = {"host": "", "ssh_port": 22, "ssh_user": DEFAULT_SSH_USER, "socks_port": 1080, "weight": 10, "enabled": True}
+
+
+def cascade_exits(i):
+    """Список exit'ов для SSH-туннелей. Старые инстансы (один upstream_host) превращаются в список из одного exit."""
+    raw = i.get("exits") or []
+    if not raw and i.get("upstream_tunnel") and (i.get("upstream_host") or "").strip():
+        raw = [{"host": i.get("upstream_host"), "ssh_port": i.get("ssh_port"),
+                "ssh_user": i.get("ssh_user"), "socks_port": i.get("upstream_port")}]
+    out = []
+    for e in raw:
+        d = {**EXIT_DEFAULTS, **{k: v for k, v in dict(e).items() if v not in (None, "")}}
+        d["host"] = (d["host"] or "").strip()
+        d["enabled"] = bool(d.get("enabled", True))
+        out.append(d)
+    return out
+
+
+def active_exits(i):
+    return [(idx, e) for idx, e in enumerate(cascade_exits(i)) if e["enabled"] and e["host"]]
+
+
 def cascade_on(i):
-    """Каскад: исходящий трафик к DC Telegram через SOCKS5 на зарубежном сервере."""
-    return bool(i.get("cascade_enabled")) and bool((i.get("upstream_host") or "").strip())
+    """Каскад: исходящий трафик к DC Telegram через SOCKS5 на зарубежном сервере (или нескольких)."""
+    if not i.get("cascade_enabled"):
+        return False
+    if i.get("upstream_tunnel"):
+        return bool(active_exits(i))
+    return bool((i.get("upstream_host") or "").strip())
 
 
 def tunnel_on(i):
-    """SSH-туннель до exit: telemt ходит на 127.0.0.1:<local>, а не по открытому SOCKS5 через границу."""
+    """SSH-туннели до exit'ов: telemt ходит на 127.0.0.1:<local>, а не по открытому SOCKS5 через границу."""
     return cascade_on(i) and bool(i.get("upstream_tunnel", False))
 
 
-def tunnel_local_port(i):
-    return TUNNEL_LOCAL_BASE + int(i["id"])
+def tunnel_local_port(i, idx=0):
+    """Локальный конец туннеля к exit №idx: 19300+id (первый), 19400+id (второй) и т.д."""
+    return TUNNEL_LOCAL_BASE + int(i["id"]) + 100 * int(idx)
 
 
 def render_upstreams(i):
-    """Блок [[upstreams]] для каскада. При cascade middle-proxy отключается."""
+    """Блоки [[upstreams]] для каскада. При cascade middle-proxy отключается."""
     q = json.dumps
     if not cascade_on(i):
         return []
@@ -131,16 +159,19 @@ def render_upstreams(i):
     if utype not in ("socks5", "socks4"):
         utype = "socks5"
     if tunnel_on(i):
-        # SOCKS на exit слушает только localhost и без пароля — доступ ограничен SSH-ключом
-        lines = [
-            "",
-            "# --- cascade: SSH-туннель к exit (127.0.0.1 -> exit:localhost SOCKS) ---",
-            "[[upstreams]]",
-            f'type = {q(utype)}',
-            f'address = {q(f"127.0.0.1:{tunnel_local_port(i)}")}',
-            "weight = 10",
-            "enabled = true",
-        ]
+        # SOCKS на каждом exit слушает только localhost и без пароля — доступ ограничен SSH-ключом.
+        # Несколько exit'ов = несколько upstream'ов, telemt распределяет по weight.
+        lines = []
+        for idx, e in active_exits(i):
+            lines += [
+                "",
+                f"# --- cascade: exit #{idx + 1} {e['host']} (SSH-туннель -> localhost SOCKS) ---",
+                "[[upstreams]]",
+                f'type = {q(utype)}',
+                f'address = {q(f"127.0.0.1:{tunnel_local_port(i, idx)}")}',
+                f"weight = {max(1, int(e['weight']))}",
+                "enabled = true",
+            ]
         return lines
     host = (i.get("upstream_host") or "").strip()
     port = int(i.get("upstream_port") or 1080)
@@ -354,15 +385,26 @@ class Runner:
 
 
 runners: dict[int, Runner] = {}
-tunnels: dict[int, "Tunnel"] = {}
+tunnels: dict[tuple, "Tunnel"] = {}   # (id инстанса, индекс exit) -> Tunnel
 
 
 def ensure_runner(iid):
     return runners.setdefault(iid, Runner(iid))
 
 
-def ensure_tunnel(iid):
-    return tunnels.setdefault(iid, Tunnel(iid))
+def ensure_tunnel(iid, idx=0):
+    return tunnels.setdefault((iid, idx), Tunnel(iid, idx))
+
+
+def start_tunnels(inst):
+    for idx, _ in active_exits(inst):
+        ensure_tunnel(inst["id"], idx).start()
+
+
+async def stop_tunnels(iid):
+    keys = [k for k in tunnels if k[0] == iid]
+    ts = [tunnels.pop(k) for k in keys]
+    await asyncio.gather(*(t.stop() for t in ts))
 
 
 # ---------------------------------------------------------------- SSH-туннель до exit
@@ -405,11 +447,13 @@ def port_listening(port, timeout=0.3):
 
 
 async def wait_tunnel_ready(inst, timeout=10):
-    port = tunnel_local_port(inst)
+    """Ждём, пока поднимется хотя бы один туннель (остальные догонят сами)."""
+    ports = [tunnel_local_port(inst, idx) for idx, _ in active_exits(inst)]
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if await asyncio.to_thread(port_listening, port):
-            return True
+        for pt in ports:
+            if await asyncio.to_thread(port_listening, pt):
+                return True
         await asyncio.sleep(0.5)
     return False
 
@@ -426,10 +470,11 @@ SSH_HINTS = (
 
 
 class Tunnel:
-    """`ssh -N -L 127.0.0.1:<local>:127.0.0.1:<socks>` до exit; перезапускается сам, пишет в лог инстанса."""
+    """`ssh -N -L 127.0.0.1:<local>:127.0.0.1:<socks>` до exit №idx; перезапускается сам, пишет в лог инстанса."""
 
-    def __init__(self, iid):
+    def __init__(self, iid, idx=0):
         self.iid = iid
+        self.idx = idx
         self.proc = None
         self.task = None
         self.started = 0.0
@@ -441,26 +486,24 @@ class Tunnel:
         return self.proc is not None and self.proc.returncode is None
 
     def log(self, s):
-        ensure_runner(self.iid).log(f"[tunnel] {s}")
+        ensure_runner(self.iid).log(f"[tunnel #{self.idx + 1}] {s}")
 
     @staticmethod
-    def command(inst):
-        host = (inst.get("upstream_host") or "").strip()
-        user = inst.get("ssh_user") or DEFAULT_SSH_USER
-        ssh_port = int(inst.get("ssh_port") or 22)
-        rport = int(inst.get("upstream_port") or 1080)
+    def command(inst, idx=0):
+        e = cascade_exits(inst)[idx]
+        host = e["host"]
         kh = known_hosts_path(host)
         return [
             "ssh", "-N", "-F", "/dev/null",
-            "-i", str(SSH_DIR / "id_ed25519"), "-p", str(ssh_port),
+            "-i", str(SSH_DIR / "id_ed25519"), "-p", str(int(e["ssh_port"])),
             "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", f"UserKnownHostsFile={kh}", "-o", "GlobalKnownHostsFile=/dev/null",
             "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
             "-o", "ExitOnForwardFailure=yes", "-o", "ConnectTimeout=10",
             "-o", "LogLevel=ERROR",
-            "-L", f"127.0.0.1:{tunnel_local_port(inst)}:127.0.0.1:{rport}",
-            f"{user}@{host}",
+            "-L", f"127.0.0.1:{tunnel_local_port(inst, idx)}:127.0.0.1:{int(e['socks_port'])}",
+            f"{e['ssh_user']}@{host}",
         ]
 
     async def _loop(self):
@@ -470,17 +513,20 @@ class Tunnel:
                 inst = store.get(self.iid)
             except HTTPException:
                 return
-            if not tunnel_on(inst) or not inst.get("enabled", True):
+            exits = cascade_exits(inst)
+            if (not tunnel_on(inst) or not inst.get("enabled", True)
+                    or self.idx >= len(exits) or not exits[self.idx]["enabled"]):
                 return
+            e = exits[self.idx]
             try:
                 await asyncio.to_thread(ensure_ssh_key)
-                cmd = self.command(inst)
-            except Exception as e:  # noqa
-                self.log(f"не удалось подготовить ключ: {e}")
+                cmd = self.command(inst, self.idx)
+            except Exception as ex:  # noqa
+                self.log(f"не удалось подготовить ключ: {ex}")
                 await asyncio.sleep(15)
                 continue
-            self.log(f"подключаюсь к {inst.get('ssh_user') or DEFAULT_SSH_USER}@{inst['upstream_host']}:{inst.get('ssh_port') or 22} "
-                     f"(локально 127.0.0.1:{tunnel_local_port(inst)})")
+            self.log(f"подключаюсь к {e['ssh_user']}@{e['host']}:{e['ssh_port']} "
+                     f"(локально 127.0.0.1:{tunnel_local_port(inst, self.idx)}, weight {e['weight']})")
             self.started = time.time()
             try:
                 self.proc = await asyncio.create_subprocess_exec(
@@ -489,8 +535,8 @@ class Tunnel:
                 self.log("ssh не найден в образе — пересоберите: docker compose build --no-cache && docker compose up -d")
                 await asyncio.sleep(30)
                 continue
-            except Exception as e:  # noqa
-                self.log(f"не удалось запустить ssh: {e}")
+            except Exception as ex:  # noqa
+                self.log(f"не удалось запустить ssh: {ex}")
                 await asyncio.sleep(15)
                 continue
             hinted = set()
@@ -532,28 +578,73 @@ class Tunnel:
         self.proc = None
 
 
-def tunnel_status(i):
+def exits_status(i):
+    """Состояние каждого exit'а: настройки + поднят ли локальный конец туннеля."""
+    out = []
+    for idx, e in enumerate(cascade_exits(i)):
+        t = tunnels.get((i["id"], idx))
+        lp = tunnel_local_port(i, idx)
+        out.append({
+            **e, "idx": idx, "local_port": lp,
+            "running": bool(t and t.running),
+            "up": bool(e["enabled"]) and port_listening(lp),
+            "restarts": t.restarts if t else 0,
+            "uptime": int(time.time() - t.started) if (t and t.running) else 0,
+        })
+    return out
+
+
+def tunnel_status(i, ex=None):
     if not tunnel_on(i):
         return None
-    t = tunnels.get(i["id"])
+    act = [x for x in (ex if ex is not None else exits_status(i)) if x["enabled"] and x["host"]]
     return {
-        "running": bool(t and t.running),
-        "up": port_listening(tunnel_local_port(i)),
-        "local_port": tunnel_local_port(i),
-        "restarts": t.restarts if t else 0,
-        "uptime": int(time.time() - t.started) if (t and t.running) else 0,
+        "up": any(x["up"] for x in act),
+        "running": any(x["running"] for x in act),
+        "total": len(act),
+        "up_count": sum(1 for x in act if x["up"]),
+        "local_port": act[0]["local_port"] if act else 0,
+        "restarts": sum(x["restarts"] for x in act),
+        "uptime": max((x["uptime"] for x in act), default=0),
     }
 
 
+async def socks_probe(port, ip="149.154.167.51", dport=443, timeout=6.0):
+    """SOCKS5 CONNECT на DC Telegram через локальный конец туннеля: проверяет всю цепочку до exit и дальше."""
+    t0 = time.time()
+    w = None
+    try:
+        r, w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), 3)
+        w.write(b"\x05\x01\x00")
+        await w.drain()
+        if await asyncio.wait_for(r.readexactly(2), timeout) != b"\x05\x00":
+            return {"ok": False, "ms": 0, "error": "SOCKS-рукопожатие отклонено"}
+        w.write(b"\x05\x01\x00\x01" + socket.inet_aton(ip) + int(dport).to_bytes(2, "big"))
+        await w.drain()
+        head = await asyncio.wait_for(r.readexactly(4), timeout)
+        atyp = head[3]
+        rest = 6 if atyp == 1 else 18 if atyp == 4 else 0
+        if atyp == 3:
+            rest = (await asyncio.wait_for(r.readexactly(1), timeout))[0] + 2
+        await asyncio.wait_for(r.readexactly(rest), timeout)
+        ok = head[1] == 0
+        return {"ok": ok, "ms": int((time.time() - t0) * 1000), "error": "" if ok else f"SOCKS-код ответа {head[1]}"}
+    except asyncio.TimeoutError:
+        return {"ok": False, "ms": 0, "error": "таймаут: exit не достучался до Telegram или туннель завис"}
+    except (OSError, asyncio.IncompleteReadError) as ex:
+        return {"ok": False, "ms": 0, "error": f"туннель не отвечает ({type(ex).__name__})"}
+    finally:
+        if w is not None:
+            w.close()
+
+
 async def restart_instance(i):
-    t = tunnels.get(i["id"])
-    if t:
-        await t.stop()
+    await stop_tunnels(i["id"])
     r = ensure_runner(i["id"])
     await r.stop()
     if i["enabled"]:
         if tunnel_on(i):
-            ensure_tunnel(i["id"]).start()
+            start_tunnels(i)
         r.start()
 
 
@@ -761,6 +852,7 @@ def local_link(i, u):
 
 
 def public_view(i, users_api, summary, health):
+    _ex = exits_status(i)
     r = ensure_runner(i["id"])
     api_users = {u["username"]: u for u in (users_api or {}).get("data", [])}
     transport = i.get("transport") or "tls"
@@ -795,7 +887,8 @@ def public_view(i, users_api, summary, health):
         "upstream_tunnel": bool(i.get("upstream_tunnel", False)),
         "ssh_port": int(i.get("ssh_port") or 22),
         "ssh_user": i.get("ssh_user") or DEFAULT_SSH_USER,
-        "tunnel": tunnel_status(i),
+        "tunnel": tunnel_status(i, _ex),
+        "exits": _ex,
         "web_listen_port": web_listen_port(i) if transport == "web" else None,
         "status": {"running": r.running, "api": bool(health), "restarts": r.restarts,
                    "uptime": int(time.time() - r.started) if r.running else 0},
@@ -881,7 +974,7 @@ async def lifespan(_):
     for i in store.d["instances"]:
         if i["enabled"]:
             if tunnel_on(i):
-                ensure_tunnel(i["id"]).start()
+                start_tunnels(i)
             ensure_runner(i["id"]).start()
     asyncio.create_task(detect_public_ip())
     host_task = asyncio.create_task(host_loop())
@@ -918,6 +1011,15 @@ def logout(response: Response):
     return {"ok": True}
 
 
+class ExitIn(BaseModel):
+    host: str = ""
+    ssh_port: int = 22
+    ssh_user: str = DEFAULT_SSH_USER
+    socks_port: int = 1080
+    weight: int = 10
+    enabled: bool = True
+
+
 class InstIn(BaseModel):
     name: str = ""
     port: int = 443
@@ -940,8 +1042,9 @@ class InstIn(BaseModel):
     upstream_user: str = ""
     upstream_pass: str = ""
     upstream_tunnel: bool = True    # SSH-туннель до exit (SOCKS на exit слушает только localhost)
-    ssh_port: int = 22              # SSH-порт exit
+    ssh_port: int = 22              # SSH-порт exit (старый формат: один exit; новый — список exits)
     ssh_user: str = DEFAULT_SSH_USER
+    exits: list[ExitIn] = []        # несколько exit'ов: по SSH-туннелю на каждый, telemt балансирует по weight
 
 
 def port_free(port):
@@ -955,30 +1058,65 @@ def port_free(port):
         s.close()
 
 
+def _validate_exit(e: ExitIn, n: int):
+    e.host = (e.host or "").strip()
+    if not e.host:
+        raise HTTPException(400, f"exit #{n}: укажите IP/хост")
+    if not HOST_RE.match(e.host) and not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", e.host):
+        raise HTTPException(400, f"exit #{n}: некорректный хост")
+    if not 1 <= int(e.ssh_port or 0) <= 65535:
+        raise HTTPException(400, f"exit #{n}: ssh_port 1–65535")
+    if not 1 <= int(e.socks_port or 0) <= 65535:
+        raise HTTPException(400, f"exit #{n}: порт SOCKS 1–65535")
+    e.ssh_user = (e.ssh_user or DEFAULT_SSH_USER).strip()
+    if not SSH_USER_RE.match(e.ssh_user):
+        raise HTTPException(400, f"exit #{n}: ssh_user — латиница нижнего регистра, цифры, _ и -")
+    if not 1 <= int(e.weight or 0) <= 100:
+        raise HTTPException(400, f"exit #{n}: weight 1–100")
+
+
 def validate_cascade(body: InstIn):
     ut = (body.upstream_type or "socks5").lower()
     if ut not in ("socks5", "socks4"):
         raise HTTPException(400, "upstream_type: socks5 или socks4")
     body.upstream_type = ut
-    if body.cascade_enabled:
-        host = (body.upstream_host or "").strip()
+    body.upstream_host = (body.upstream_host or "").strip()
+    if body.upstream_tunnel:
+        exits = list(body.exits or [])
+        if not exits and body.cascade_enabled and body.upstream_host:
+            # старый формат (один exit в плоских полях) → список из одного
+            exits = [ExitIn(host=body.upstream_host, ssh_port=body.ssh_port, ssh_user=body.ssh_user,
+                            socks_port=body.upstream_port)]
+        if len(exits) > MAX_EXITS:
+            raise HTTPException(400, f"Не больше {MAX_EXITS} exit'ов")
+        seen = set()
+        for n, e in enumerate(exits, 1):
+            _validate_exit(e, n)
+            key = (e.host, int(e.ssh_port))
+            if key in seen:
+                raise HTTPException(400, f"exit #{n}: {e.host}:{e.ssh_port} уже в списке")
+            seen.add(key)
+        if body.cascade_enabled:
+            if not exits:
+                raise HTTPException(400, "Добавьте хотя бы один exit (IP зарубежного VPS)")
+            if not any(e.enabled for e in exits):
+                raise HTTPException(400, "Включите хотя бы один exit")
+        body.exits = exits
+        if exits:  # плоские поля — копия первого exit'а (совместимость и отображение)
+            body.upstream_host, body.upstream_port = exits[0].host, int(exits[0].socks_port)
+            body.ssh_port, body.ssh_user = int(exits[0].ssh_port), exits[0].ssh_user
+        body.upstream_user = (body.upstream_user or "").strip()
+        body.upstream_pass = (body.upstream_pass or "").strip()
+    elif body.cascade_enabled:
+        host = body.upstream_host
         if not host:
             raise HTTPException(400, "Для каскада укажите upstream_host (IP зарубежного VPS)")
         if not HOST_RE.match(host) and not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
             raise HTTPException(400, "Некорректный upstream_host")
         if not 1 <= int(body.upstream_port or 0) <= 65535:
             raise HTTPException(400, "upstream_port: 1–65535")
-        body.upstream_host = host
         body.upstream_user = (body.upstream_user or "").strip()
         body.upstream_pass = (body.upstream_pass or "").strip()
-        if body.upstream_tunnel:
-            if not 1 <= int(body.ssh_port or 0) <= 65535:
-                raise HTTPException(400, "ssh_port: 1–65535")
-            body.ssh_user = (body.ssh_user or DEFAULT_SSH_USER).strip()
-            if not SSH_USER_RE.match(body.ssh_user):
-                raise HTTPException(400, "ssh_user: латиница нижнего регистра, цифры, _ и -")
-    else:
-        body.upstream_host = (body.upstream_host or "").strip()
 
 
 def validate(body: InstIn, current=None):
@@ -1101,9 +1239,7 @@ async def delete_instance(iid: int):
     inst = store.get(iid)
     await ensure_runner(iid).stop()
     runners.pop(iid, None)
-    t = tunnels.pop(iid, None)
-    if t:
-        await t.stop()
+    await stop_tunnels(iid)
     async with store.lock:
         store.d["instances"].remove(inst)
         store.save()
@@ -1451,6 +1587,7 @@ async def set_cascade(iid: int, body: InstIn):
         upstream_tunnel=body.upstream_tunnel,
         ssh_port=int(body.ssh_port or 22),
         ssh_user=body.ssh_user or DEFAULT_SSH_USER,
+        exits=body.exits,
     )
     validate(merged, inst)
     async with store.lock:
@@ -1463,6 +1600,7 @@ async def set_cascade(iid: int, body: InstIn):
         inst["upstream_tunnel"] = merged.upstream_tunnel
         inst["ssh_port"] = merged.ssh_port
         inst["ssh_user"] = merged.ssh_user
+        inst["exits"] = [e.model_dump() for e in merged.exits]
         if merged.cascade_enabled:
             # middle-proxy / ad_tag ломают custom upstream
             inst["middle_proxy"] = False
@@ -1475,26 +1613,38 @@ async def set_cascade(iid: int, body: InstIn):
 async def tunnel_reset_hostkey(iid: int):
     """Забыть сохранённый ключ хоста exit (после переустановки exit) и переподключить туннель."""
     inst = store.get(iid)
-    host = (inst.get("upstream_host") or "").strip()
-    if host:
-        known_hosts_path(host).unlink(missing_ok=True)
+    hosts = {e["host"] for e in cascade_exits(inst)} | {(inst.get("upstream_host") or "").strip()}
+    for host in hosts:
+        if host:
+            known_hosts_path(host).unlink(missing_ok=True)
     await restart_instance(inst)
     return {"ok": True}
 
 
+@app.post("/api/instances/{iid}/exits/check", dependencies=[Depends(require_auth)])
+async def check_exits(iid: int):
+    """Проверка каждого exit'а: SOCKS5 CONNECT на DC Telegram через его туннель (цепочка вход → exit → Telegram)."""
+    inst = store.get(iid)
+    act = active_exits(inst) if tunnel_on(inst) else []
+    results = await asyncio.gather(*(socks_probe(tunnel_local_port(inst, idx)) for idx, _ in act))
+    return {"results": [{"idx": idx, "host": e["host"], **r} for (idx, e), r in zip(act, results)]}
+
+
 @app.get("/api/instances/{iid}/cascade/script", dependencies=[Depends(require_auth)])
-def instance_exit_script(iid: int, tunnel: int = -1):
+def instance_exit_script(iid: int, tunnel: int = -1, exit: int = 0):
     """Скрипт exit. tunnel=1 — режим SSH-туннеля, 0 — прямой SOCKS5, по умолчанию как сохранено в инстансе."""
     inst = store.get(iid)
     use_tunnel = bool(inst.get("upstream_tunnel", False)) if tunnel < 0 else bool(tunnel)
     if use_tunnel:
-        ssh_user = inst.get("ssh_user") or DEFAULT_SSH_USER
-        port = int(inst.get("upstream_port") or 1080)
+        ex = cascade_exits(inst)
+        e = ex[min(max(exit, 0), len(ex) - 1)] if ex else {}
+        ssh_user = e.get("ssh_user") or inst.get("ssh_user") or DEFAULT_SSH_USER
+        port = int(e.get("socks_port") or inst.get("upstream_port") or 1080)
         pub = cascade_ssh_pubkey()["pubkey"]
         return {
             "script": build_exit_script_tunnel(pub, ssh_user, port),
             "tunnel": True, "upstream_type": "socks5", "upstream_port": port, "ssh_user": ssh_user,
-            "upstream_host": inst.get("upstream_host") or "",
+            "upstream_host": (e.get("host") or inst.get("upstream_host") or ""),
             "cascade_enabled": bool(inst.get("cascade_enabled")),
         }
     user = (inst.get("upstream_user") or "").strip() or "telemt"
