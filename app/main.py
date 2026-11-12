@@ -1001,6 +1001,7 @@ def caddy_content():
         store.d["settings"].get("public_host", ""), store.d["settings"].get("acme_email", ""),
         store.d["instances"], WEB_LISTEN_BASE,
         admin_addr=CADDY_ADMIN if CADDY_MANAGED else None,
+        site_id=store.d["settings"].get("default_site") or "default",
     )
 
 
@@ -1952,7 +1953,10 @@ async def put_settings(body: SettingsIn):
     async with store.lock:
         store.d["settings"]["public_host"] = host
         store.d["settings"]["acme_email"] = body.acme_email.strip()
-        store.d["settings"]["default_site"] = (body.default_site or "default").strip() or "default"
+        site_pick = (body.default_site or "default").strip() or "default"
+        if sites_mgr and not (sites_mgr.sites_dir / site_pick).is_dir():
+            raise HTTPException(400, f"Сайт «{site_pick}» не найден")
+        store.d["settings"]["default_site"] = site_pick
         store.save()
     for i in store.d["instances"]:
         if i.get("enabled"):

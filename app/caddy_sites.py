@@ -1,11 +1,13 @@
 """Caddyfile generation, decoy static sites, and site upload helpers for telemt-panel."""
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import zipfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -143,45 +145,81 @@ class SiteManager:
         root = self.ensure_site(site_id)
         name = Path(filename).name
         if name.lower().endswith(".zip"):
-            tmp = root / "_upload.zip"
-            tmp.write_bytes(data)
-            try:
-                with zipfile.ZipFile(tmp, "r") as zf:
-                    for info in zf.infolist():
-                        if info.is_dir():
-                            continue
-                        # prevent path traversal
-                        target = (root / info.filename).resolve()
-                        if not str(target).startswith(str(root.resolve())):
-                            continue
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(zf.read(info))
-            finally:
-                tmp.unlink(missing_ok=True)
-            # if single top-level dir, flatten
-            kids = [c for c in root.iterdir() if c.name != "_upload.zip"]
-            if len(kids) == 1 and kids[0].is_dir() and not (root / "index.html").exists():
-                top = kids[0]
-                for f in top.rglob("*"):
-                    if f.is_file():
-                        rel = f.relative_to(top)
-                        dest = root / rel
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(f), str(dest))
-                shutil.rmtree(top, ignore_errors=True)
+            self._replace_from_zip(root, data)
         else:
             # single file — if html, as index; else store by name
             if name.lower().endswith((".html", ".htm")) and name.lower() in ("index.html", "index.htm", "default.html"):
                 (root / "index.html").write_bytes(data)
-            elif name.lower().endswith((".html", ".htm")) and not (root / "index.html").exists():
+            elif name.lower().endswith((".html", ".htm")) and (
+                    not (root / "index.html").exists()
+                    or (root / "index.html").read_text(encoding="utf-8", errors="ignore") == DEFAULT_SITE_HTML):
+                # одиночная страница становится главной, пока там стандартная заглушка «Welcome»
                 (root / "index.html").write_bytes(data)
             else:
                 (root / name).write_bytes(data)
         # restart server to pick up files (SimpleHTTPRequestHandler reads live)
         return self.upstream_url(site_id)
 
+    MAX_ZIP_FILES = 5000
+    MAX_ZIP_BYTES = 100 * 1024 * 1024
+
+    def _replace_from_zip(self, root: Path, data: bytes):
+        """ZIP заменяет содержимое сайта целиком. index.html ищется в корне архива или в папке проекта
+        (архив, собранный «папкой», — самый частый случай). Нет index.html — ошибка, сайт не трогаем."""
+        tmp = Path(tempfile.mkdtemp(prefix=".upload_", dir=self.sites_dir))
+        try:
+            try:
+                zf = zipfile.ZipFile(io.BytesIO(data))
+            except zipfile.BadZipFile:
+                raise ValueError("Это не ZIP-архив")
+            with zf:
+                infos = [i for i in zf.infolist() if not i.is_dir()]
+                if len(infos) > self.MAX_ZIP_FILES or sum(i.file_size for i in infos) > self.MAX_ZIP_BYTES:
+                    raise ValueError("Архив слишком большой (до 5000 файлов и 100 МБ в распакованном виде)")
+                base = tmp.resolve()
+                for info in infos:
+                    parts = [p for p in info.filename.replace("\\", "/").split("/") if p not in ("", ".")]
+                    if (not parts or ".." in parts or parts[0] == "__MACOSX"
+                            or parts[-1] in (".DS_Store", "Thumbs.db")):
+                        continue
+                    target = tmp.joinpath(*parts).resolve()
+                    if not target.is_relative_to(base):  # защита от path traversal
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(zf.read(info))
+            site_root = None
+            for idx_name in ("index.html", "index.htm"):
+                found = sorted((p.parent for p in tmp.rglob(idx_name)),
+                               key=lambda d: len(d.relative_to(tmp).parts))
+                if found:
+                    site_root = found[0]
+                    break
+            if site_root is None:
+                raise ValueError("В архиве не найден index.html — сайт не изменён")
+            if not (site_root / "index.html").exists():
+                shutil.copy(site_root / "index.htm", site_root / "index.html")
+            for child in list(root.iterdir()):
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            for child in list(site_root.iterdir()):
+                shutil.move(str(child), str(root / child.name))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def decoy_root(self, site_id: str = "default") -> Path:
+        """Каталог сайта-прикрытия, который отдаёт Caddy (выбранный сайт, при ошибке — default)."""
+        try:
+            p = self.site_path((site_id or "default").strip() or "default")
+            if p.is_dir():
+                return p
+        except ValueError:
+            pass
+        return self.sites_dir / "default"
+
     def generate_caddyfile(self, public_host: str, email: str, web_instances: list[dict], web_listen_base: int,
-                           admin_addr: str | None = None) -> str:
+                           admin_addr: str | None = None, site_id: str = "default") -> str:
         """admin_addr задан, когда Caddy запускает сама панель: тогда в глобальные опции добавляются
         admin-сокет (для reload), читаемый консольный лог и отключение HTTP/3 (UDP 443 не нужен)."""
         host = (public_host or "").strip().lower()
@@ -209,7 +247,7 @@ class SiteManager:
             lines += [
                 f"{host} {{",
                 "\tencode gzip",
-                f"\troot * {self.sites_dir / 'default'}",
+                f"\troot * {self.decoy_root(site_id)}",
                 "\tfile_server",
                 "}",
                 "",
@@ -241,7 +279,7 @@ class SiteManager:
         if all((i.get("web_base_path") or "").strip() for i in webs):
             lines += [
                 "\thandle {",
-                f"\t\troot * {self.sites_dir / 'default'}",
+                f"\t\troot * {self.decoy_root(site_id)}",
                 "\t\tfile_server",
                 "\t}",
             ]

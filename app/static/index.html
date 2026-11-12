@@ -667,14 +667,17 @@ function systemDialog(){
   const sitesBox = h('div',{});
   function renderSites(){
     sitesBox.replaceChildren();
+    const active=(S.settings&&S.settings.default_site)||'default';
     for(const s of (S.sites||[])){
       sitesBox.append(h('div',{class:'user'},
         h('div',{class:'row'},
           h('b',{style:'flex:1'},s.id),
-          h('span',{class:'hint',style:'margin:0'}, s.files+' файлов · '+(s.running?'up':'down'))
+          s.id===active ? h('span',{class:'pill'},'основной') : null,
+          h('span',{class:'hint',style:'margin:0'}, s.files+' файлов · '+(s.has_index?'index.html есть':'нет index.html'))
         ),
         h('div',{class:'row'},
           h('button',{onclick:()=>uploadSite(s.id)},'Загрузить HTML/ZIP'),
+          s.id!==active ? h('button',{onclick:()=>act(()=>api('PUT','/api/settings',{public_host:st.public_host||'',acme_email:st.acme_email||'',default_site:s.id}),'Сайт «'+s.id+'» теперь основной')},'Сделать основным') : null,
           s.id!=='default' && h('button',{class:'danger',onclick:()=>confirm('Удалить сайт?')&&act(()=>api('DELETE','/api/sites/'+s.id),'Удалён')},'Удалить')
         )
       ));
@@ -690,11 +693,11 @@ function systemDialog(){
       h('p',{class:'hint'},'После сохранения Caddy сам поднимет сайт-прикрытие на этом домене и получит сертификат. A-запись должна указывать на сервер, порты 80/443 — быть открыты.'),
       h('div',{class:'row',style:'margin-bottom:12px'},
         h('button',{class:'primary',onclick:()=>act(async()=>{
-          await api('PUT','/api/settings',{public_host:host.value, acme_email:email.value, default_site:'default'});
+          await api('PUT','/api/settings',{public_host:host.value, acme_email:email.value, default_site:(st.default_site||'default')});
         },'Сохранено')},'Сохранить домен'),
       ),
       h('h3',{style:'margin:18px 0 8px;font-size:15px'},'Сайты-прикрытия'),
-      h('p',{class:'hint'},'Статика для decoy. WEB без правильной ссылки отдаёт этот сайт.'),
+      h('p',{class:'hint'},'Статика для decoy. «Основной» сайт Caddy отдаёт на вашем домене. ZIP заменяет сайт целиком: index.html должен быть в корне архива или в папке проекта. Изменения видны сразу (обновите страницу: Ctrl+F5).'),
       sitesBox,
       h('div',{class:'row'}, newId, h('button',{onclick:()=>newId.value&&act(()=>api('POST','/api/sites',{id:newId.value.trim()}),'Сайт создан')},'Создать')),
       h('h3',{style:'margin:18px 0 8px;font-size:15px'},'Сеть хоста'),
