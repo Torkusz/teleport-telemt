@@ -974,6 +974,26 @@ CADDY_ADMIN = os.getenv("CADDY_ADMIN", "unix//run/telemt/caddy.sock")  # тол�
 CADDY_STORAGE = DATA / "caddy-storage"       # сертификаты и ACME-аккаунт: переживают пересборку образа
 CADDY_CONFIG_HOME = DATA / "caddy-config"
 IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+CADDY_BUSY_MSG = ("Caddy не запущен: порт {ports} на сервере уже занят другим процессом (не панелью). "
+                  "Выясните на хосте: sudo ss -ltnp | grep -E ':(80|443) '. Если это Caddy, nginx или apache — остановите его "
+                  "(например: sudo systemctl disable --now caddy) и нажмите «Применить / перезапустить». "
+                  "Если он должен остаться — задайте CADDY_MANAGE=0 в .env.")
+
+
+def ports_in_use(ports=(80, 443)):
+    """Какие из портов уже кем-то слушаются (проверка bind до запуска Caddy)."""
+    busy = []
+    for pt in ports:
+        sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sk.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sk.bind(("0.0.0.0", pt))
+        except OSError as e:
+            if e.errno == 98:  # EADDRINUSE
+                busy.append(pt)
+        finally:
+            sk.close()
+    return busy
 
 
 def caddy_content():
@@ -1058,6 +1078,7 @@ class CaddyRunner:
         path = sites_mgr.caddy_dir / "Caddyfile"
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         self.stopping = False
+        self.last_error = ""
         self.proc = await asyncio.create_subprocess_exec(
             "caddy", "run", "--config", str(path), "--adapter", "caddyfile",
             env=caddy_env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
@@ -1076,6 +1097,9 @@ class CaddyRunner:
         self.log(f"[panel] caddy завершился с кодом {code}, повтор через несколько секунд")
         self.last_error = f"caddy завершился с кодом {code}: " + " | ".join(list(self.logs)[-3:])[-300:]
         self.next_start = time.time() + (3 if time.time() - self.started > 60 else 15)
+        if "address already in use" in " ".join(list(self.logs)[-8:]):
+            self.last_error = CADDY_BUSY_MSG.format(ports="80/443")
+            self.next_start = time.time() + 30
 
     async def reload(self):
         path = sites_mgr.caddy_dir / "Caddyfile"
@@ -1153,6 +1177,11 @@ async def caddy_apply(force=False):
         if not caddy.running:
             if not force and time.time() < caddy.next_start:
                 return False, "ожидание перед повторным запуском Caddy"
+            busy = await asyncio.to_thread(ports_in_use) if host_set else []
+            if busy:
+                caddy.last_error = CADDY_BUSY_MSG.format(ports="/".join(map(str, busy)))
+                caddy.next_start = time.time() + 20
+                return False, caddy.last_error
             await caddy.start()
             return True, "Caddy запущен"
         if force or digest != caddy.applied:
