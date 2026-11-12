@@ -182,9 +182,11 @@ class SiteManager:
 
     def generate_caddyfile(self, public_host: str, email: str, web_instances: list[dict], web_listen_base: int) -> str:
         host = (public_host or "").strip().lower()
+        email = (email or "").strip()
         lines = []
-        if email:
-            lines += [f"{email}", ""]
+        # Global options MUST be inside a top-level { } block
+        if email and "@" in email:
+            lines += ["{", f"\temail {email}", "}", ""]
         if not host:
             lines += ["# Укажите домен в Системе → Адрес в ссылках", ""]
             return "\n".join(lines)
@@ -209,8 +211,9 @@ class SiteManager:
             port = web_listen_base + int(i["id"])
             base = (i.get("web_base_path") or "").strip().strip("/")
             if base:
+                # keep path prefix — telemt WEB expects full path (do NOT use handle_path)
                 lines += [
-                    f"\thandle_path /{base}/* {{",
+                    f"\thandle /{base}/* {{",
                     f"\t\treverse_proxy 127.0.0.1:{port}",
                     "\t}",
                     f"\thandle /{base} {{",
