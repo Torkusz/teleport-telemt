@@ -183,10 +183,19 @@ def render_toml(i):
         ]
         if base:
             out.append(f"base_path = {q(base)}")
-        # public_addr: IP:443 — telemt использует для internal route; оператор должен указать реальный
-        pub = store.d["settings"].get("public_addr") or ""
-        if pub:
-            out.append(f"public_addr = {q(pub)}")
+        # public_addr обязателен в telemt WEB — без него процесс падает с Config error
+        pub = (store.d["settings"].get("public_addr") or "").strip()
+        if not pub:
+            ip = (detected_host.get("value") or "").strip()
+            if ip and re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+                pub = f"{ip}:443"
+            elif host and re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+                pub = f"{host}:443"
+            else:
+                pub = f"{host}:443"
+        if pub and ":" not in pub.split("/")[-1]:
+            pub = f"{pub}:443"
+        out.append(f"public_addr = {q(pub)}")
         out += [
             "", "[web.vhosts.decoy]",
             'mode = "http_upstream"',
