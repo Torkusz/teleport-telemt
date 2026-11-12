@@ -11,6 +11,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import io
 import platform
 import socket
@@ -38,6 +39,9 @@ PANEL_PORT = int(os.getenv("PANEL_PORT", "8080"))
 API_PORT_BASE = 19100  # Control API инстансов: 127.0.0.1:19100+id
 WEB_LISTEN_BASE = 18080  # WEB-listener telemt на 127.0.0.1:18080+id
 SITE_LISTEN_BASE = 18200
+TUNNEL_LOCAL_BASE = 19300  # локальный конец SSH-туннеля к exit: 127.0.0.1:19300+id
+DEFAULT_SSH_USER = "telemt-tunnel"
+SSH_DIR = DATA / "ssh"
 STATIC = Path(__file__).parent / "static"
 SITES_DIR = DATA / "sites"
 CADDY_DIR = DATA / "caddy"
@@ -52,6 +56,7 @@ PRESETS = [
 ]
 
 HOST_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
+SSH_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 USER_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
 
@@ -108,18 +113,39 @@ def cascade_on(i):
     return bool(i.get("cascade_enabled")) and bool((i.get("upstream_host") or "").strip())
 
 
+def tunnel_on(i):
+    """SSH-туннель до exit: telemt ходит на 127.0.0.1:<local>, а не по открытому SOCKS5 через границу."""
+    return cascade_on(i) and bool(i.get("upstream_tunnel", False))
+
+
+def tunnel_local_port(i):
+    return TUNNEL_LOCAL_BASE + int(i["id"])
+
+
 def render_upstreams(i):
     """Блок [[upstreams]] для каскада. При cascade middle-proxy отключается."""
     q = json.dumps
     if not cascade_on(i):
         return []
+    utype = (i.get("upstream_type") or "socks5").lower()
+    if utype not in ("socks5", "socks4"):
+        utype = "socks5"
+    if tunnel_on(i):
+        # SOCKS на exit слушает только localhost и без пароля — доступ ограничен SSH-ключом
+        lines = [
+            "",
+            "# --- cascade: SSH-туннель к exit (127.0.0.1 -> exit:localhost SOCKS) ---",
+            "[[upstreams]]",
+            f'type = {q(utype)}',
+            f'address = {q(f"127.0.0.1:{tunnel_local_port(i)}")}',
+            "weight = 10",
+            "enabled = true",
+        ]
+        return lines
     host = (i.get("upstream_host") or "").strip()
     port = int(i.get("upstream_port") or 1080)
     user = (i.get("upstream_user") or "").strip()
     password = (i.get("upstream_pass") or "").strip()
-    utype = (i.get("upstream_type") or "socks5").lower()
-    if utype not in ("socks5", "socks4"):
-        utype = "socks5"
     lines = [
         "",
         "# --- cascade: exit SOCKS on foreign VPS ---",
@@ -281,6 +307,9 @@ class Runner:
             except HTTPException:
                 return
             cfg = write_config(inst)
+            if tunnel_on(inst):
+                if not await wait_tunnel_ready(inst, 10):
+                    self.log("[panel] SSH-туннель к exit ещё не поднят — запускаю telemt, туннель догонит сам (см. строки [tunnel])")
             self.log(f"[panel] запуск telemt (порт {inst['port']}, SNI {inst['sni']})")
             self.started = time.time()
             try:
@@ -325,18 +354,207 @@ class Runner:
 
 
 runners: dict[int, Runner] = {}
+tunnels: dict[int, "Tunnel"] = {}
 
 
 def ensure_runner(iid):
     return runners.setdefault(iid, Runner(iid))
 
 
+def ensure_tunnel(iid):
+    return tunnels.setdefault(iid, Tunnel(iid))
+
+
+# ---------------------------------------------------------------- SSH-туннель до exit
+def ensure_ssh_key():
+    """Ключ панели для входа на exit (генерируется один раз, лежит в /data/ssh)."""
+    SSH_DIR.mkdir(parents=True, exist_ok=True)
+    os.chmod(SSH_DIR, 0o700)
+    key = SSH_DIR / "id_ed25519"
+    if not key.exists():
+        r = subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "telemt-panel", "-f", str(key)],
+                           capture_output=True, text=True, timeout=20)
+        if r.returncode != 0:
+            raise RuntimeError(f"ssh-keygen: {r.stderr.strip() or r.stdout.strip()}")
+    os.chmod(key, 0o600)
+    return key
+
+
+def ssh_pubkey():
+    key = ensure_ssh_key()
+    pub = Path(str(key) + ".pub")
+    if not pub.exists():
+        r = subprocess.run(["ssh-keygen", "-y", "-f", str(key)], capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            raise RuntimeError(f"ssh-keygen -y: {r.stderr.strip()}")
+        pub.write_text(r.stdout.strip() + " telemt-panel\n")
+    return pub.read_text().strip()
+
+
+def known_hosts_path(host):
+    safe = re.sub(r"[^A-Za-z0-9.-]", "_", host)
+    return SSH_DIR / f"known_hosts.{safe}"
+
+
+def port_listening(port, timeout=0.3):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+async def wait_tunnel_ready(inst, timeout=10):
+    port = tunnel_local_port(inst)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if await asyncio.to_thread(port_listening, port):
+            return True
+        await asyncio.sleep(0.5)
+    return False
+
+
+SSH_HINTS = (
+    ("REMOTE HOST IDENTIFICATION HAS CHANGED", "ключ хоста exit изменился (переустановка?). Нажмите «Сбросить ключ хоста» в настройках каскада."),
+    ("Host key verification failed", "ключ хоста exit не совпал. Нажмите «Сбросить ключ хоста» в настройках каскада."),
+    ("Permission denied", "exit не принял ключ панели: выполните на exit свежий скрипт из панели (он добавляет ключ)."),
+    ("Connection refused", "SSH-порт exit закрыт или указан неверно (поле «SSH порт»)."),
+    ("timed out", "до SSH-порта exit не достучаться (файрвол/неверный IP/блокировка по пути)."),
+    ("administratively prohibited", "на exit запрещён TCP-forwarding (AllowTcpForwarding no) или нет permitopen на этот порт."),
+    ("cannot listen to port", "локальный порт туннеля занят — перезапустите инстанс."),
+)
+
+
+class Tunnel:
+    """`ssh -N -L 127.0.0.1:<local>:127.0.0.1:<socks>` до exit; перезапускается сам, пишет в лог инстанса."""
+
+    def __init__(self, iid):
+        self.iid = iid
+        self.proc = None
+        self.task = None
+        self.started = 0.0
+        self.restarts = 0
+        self.stopping = False
+
+    @property
+    def running(self):
+        return self.proc is not None and self.proc.returncode is None
+
+    def log(self, s):
+        ensure_runner(self.iid).log(f"[tunnel] {s}")
+
+    @staticmethod
+    def command(inst):
+        host = (inst.get("upstream_host") or "").strip()
+        user = inst.get("ssh_user") or DEFAULT_SSH_USER
+        ssh_port = int(inst.get("ssh_port") or 22)
+        rport = int(inst.get("upstream_port") or 1080)
+        kh = known_hosts_path(host)
+        return [
+            "ssh", "-N", "-F", "/dev/null",
+            "-i", str(SSH_DIR / "id_ed25519"), "-p", str(ssh_port),
+            "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", f"UserKnownHostsFile={kh}", "-o", "GlobalKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+            "-o", "ExitOnForwardFailure=yes", "-o", "ConnectTimeout=10",
+            "-o", "LogLevel=ERROR",
+            "-L", f"127.0.0.1:{tunnel_local_port(inst)}:127.0.0.1:{rport}",
+            f"{user}@{host}",
+        ]
+
+    async def _loop(self):
+        backoff = 2
+        while not self.stopping:
+            try:
+                inst = store.get(self.iid)
+            except HTTPException:
+                return
+            if not tunnel_on(inst) or not inst.get("enabled", True):
+                return
+            try:
+                await asyncio.to_thread(ensure_ssh_key)
+                cmd = self.command(inst)
+            except Exception as e:  # noqa
+                self.log(f"не удалось подготовить ключ: {e}")
+                await asyncio.sleep(15)
+                continue
+            self.log(f"подключаюсь к {inst.get('ssh_user') or DEFAULT_SSH_USER}@{inst['upstream_host']}:{inst.get('ssh_port') or 22} "
+                     f"(локально 127.0.0.1:{tunnel_local_port(inst)})")
+            self.started = time.time()
+            try:
+                self.proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            except FileNotFoundError:
+                self.log("ssh не найден в образе — пересоберите: docker compose build --no-cache && docker compose up -d")
+                await asyncio.sleep(30)
+                continue
+            except Exception as e:  # noqa
+                self.log(f"не удалось запустить ssh: {e}")
+                await asyncio.sleep(15)
+                continue
+            hinted = set()
+            async for line in self.proc.stdout:
+                txt = ANSI.sub("", line.decode(errors="replace").rstrip())
+                self.log(txt)
+                for needle, hint in SSH_HINTS:
+                    if needle in txt and needle not in hinted:
+                        hinted.add(needle)
+                        self.log("→ " + hint)
+            code = await self.proc.wait()
+            if self.stopping:
+                return
+            self.restarts += 1
+            self.log(f"ssh завершился с кодом {code}, повтор через {backoff}с")
+            if time.time() - self.started > 60:
+                backoff = 2
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30)
+
+    def start(self):
+        self.stopping = False
+        self.task = asyncio.create_task(self._loop())
+
+    async def stop(self):
+        self.stopping = True
+        if self.running:
+            self.proc.terminate()
+            try:
+                await asyncio.wait_for(self.proc.wait(), 5)
+            except asyncio.TimeoutError:
+                self.proc.kill()
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except (asyncio.CancelledError, Exception):  # noqa
+                pass
+        self.proc = None
+
+
+def tunnel_status(i):
+    if not tunnel_on(i):
+        return None
+    t = tunnels.get(i["id"])
+    return {
+        "running": bool(t and t.running),
+        "up": port_listening(tunnel_local_port(i)),
+        "local_port": tunnel_local_port(i),
+        "restarts": t.restarts if t else 0,
+        "uptime": int(time.time() - t.started) if (t and t.running) else 0,
+    }
+
+
 async def restart_instance(i):
+    t = tunnels.get(i["id"])
+    if t:
+        await t.stop()
     r = ensure_runner(i["id"])
     await r.stop()
     if i["enabled"]:
+        if tunnel_on(i):
+            ensure_tunnel(i["id"]).start()
         r.start()
-
 
 
 # ---------------------------------------------------------------- бинарник telemt и обновление
@@ -574,6 +792,10 @@ def public_view(i, users_api, summary, health):
             "cascade_enabled", "upstream_type", "upstream_host", "upstream_port", "upstream_user", "upstream_pass",
         )},
         "cascade_active": cascade_on(i),
+        "upstream_tunnel": bool(i.get("upstream_tunnel", False)),
+        "ssh_port": int(i.get("ssh_port") or 22),
+        "ssh_user": i.get("ssh_user") or DEFAULT_SSH_USER,
+        "tunnel": tunnel_status(i),
         "web_listen_port": web_listen_port(i) if transport == "web" else None,
         "status": {"running": r.running, "api": bool(health), "restarts": r.restarts,
                    "uptime": int(time.time() - r.started) if r.running else 0},
@@ -658,12 +880,14 @@ async def lifespan(_):
     ADMIN_PW, SESSION_KEY = load_secrets()
     for i in store.d["instances"]:
         if i["enabled"]:
+            if tunnel_on(i):
+                ensure_tunnel(i["id"]).start()
             ensure_runner(i["id"]).start()
     asyncio.create_task(detect_public_ip())
     host_task = asyncio.create_task(host_loop())
     yield
     host_task.cancel()
-    await asyncio.gather(*(r.stop() for r in runners.values()))
+    await asyncio.gather(*(r.stop() for r in runners.values()), *(t.stop() for t in tunnels.values()))
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -715,6 +939,9 @@ class InstIn(BaseModel):
     upstream_port: int = 1080
     upstream_user: str = ""
     upstream_pass: str = ""
+    upstream_tunnel: bool = True    # SSH-туннель до exit (SOCKS на exit слушает только localhost)
+    ssh_port: int = 22              # SSH-порт exit
+    ssh_user: str = DEFAULT_SSH_USER
 
 
 def port_free(port):
@@ -744,6 +971,12 @@ def validate_cascade(body: InstIn):
         body.upstream_host = host
         body.upstream_user = (body.upstream_user or "").strip()
         body.upstream_pass = (body.upstream_pass or "").strip()
+        if body.upstream_tunnel:
+            if not 1 <= int(body.ssh_port or 0) <= 65535:
+                raise HTTPException(400, "ssh_port: 1–65535")
+            body.ssh_user = (body.ssh_user or DEFAULT_SSH_USER).strip()
+            if not SSH_USER_RE.match(body.ssh_user):
+                raise HTTPException(400, "ssh_user: латиница нижнего регистра, цифры, _ и -")
     else:
         body.upstream_host = (body.upstream_host or "").strip()
 
@@ -868,6 +1101,9 @@ async def delete_instance(iid: int):
     inst = store.get(iid)
     await ensure_runner(iid).stop()
     runners.pop(iid, None)
+    t = tunnels.pop(iid, None)
+    if t:
+        await t.stop()
     async with store.lock:
         store.d["instances"].remove(inst)
         store.save()
@@ -1129,10 +1365,33 @@ echo "Ссылка tg://webproxy для клиентов НЕ меняется �
 """
 
 
+def build_exit_script_tunnel(pubkey: str, ssh_user: str = DEFAULT_SSH_USER, port: int = 1080) -> str:
+    """Скрипт exit для режима SSH-туннеля: берётся из exit-setup.sh (единый источник), в него подставляются значения панели."""
+    here = Path(__file__).parent
+    for cand in (here / "exit-setup.sh", here.parent / "exit-setup.sh"):
+        if cand.exists():
+            body = cand.read_text(encoding="utf-8")
+            break
+    else:
+        raise HTTPException(500, "exit-setup.sh не найден рядом с приложением")
+    defaults = f"PUBKEY={shlex.quote(pubkey)}\nSSH_USER={shlex.quote(ssh_user)}\nRPORT={int(port)}"
+    return body.replace("#__PANEL_DEFAULTS__", defaults, 1)
+
+
+@app.get("/api/cascade/ssh-pubkey", dependencies=[Depends(require_auth)])
+def cascade_ssh_pubkey():
+    try:
+        return {"pubkey": ssh_pubkey()}
+    except (RuntimeError, FileNotFoundError) as e:
+        raise HTTPException(500, f"Не удалось получить SSH-ключ панели (нет openssh-client? пересоберите образ): {e}")
+
+
 class ExitGenIn(BaseModel):
     upstream_port: int = 1080
     upstream_user: str = ""
     upstream_pass: str = ""
+    tunnel: bool = True
+    ssh_user: str = DEFAULT_SSH_USER
 
 
 @app.post("/api/cascade/exit-script", dependencies=[Depends(require_auth)])
@@ -1143,6 +1402,16 @@ def cascade_exit_script(body: ExitGenIn):
     port = int(body.upstream_port or 1080)
     if not 1 <= port <= 65535:
         raise HTTPException(400, "port 1–65535")
+    if body.tunnel:
+        ssh_user = (body.ssh_user or DEFAULT_SSH_USER).strip()
+        if not SSH_USER_RE.match(ssh_user):
+            raise HTTPException(400, "ssh_user: латиница нижнего регистра, цифры, _ и -")
+        pub = cascade_ssh_pubkey()["pubkey"]
+        return {
+            "script": build_exit_script_tunnel(pub, ssh_user, port),
+            "tunnel": True, "upstream_type": "socks5", "upstream_port": port, "ssh_user": ssh_user,
+            "hint": "На зарубежном VPS: скопируйте скрипт → bash. IP и SSH-порт из вывода впишите в каскад инстанса.",
+        }
     script = build_exit_script(user, password, port)
     return {
         "script": script,
@@ -1179,6 +1448,9 @@ async def set_cascade(iid: int, body: InstIn):
         upstream_port=int(body.upstream_port or 1080),
         upstream_user=body.upstream_user or "",
         upstream_pass=body.upstream_pass or "",
+        upstream_tunnel=body.upstream_tunnel,
+        ssh_port=int(body.ssh_port or 22),
+        ssh_user=body.ssh_user or DEFAULT_SSH_USER,
     )
     validate(merged, inst)
     async with store.lock:
@@ -1188,6 +1460,9 @@ async def set_cascade(iid: int, body: InstIn):
         inst["upstream_port"] = merged.upstream_port
         inst["upstream_user"] = merged.upstream_user
         inst["upstream_pass"] = merged.upstream_pass
+        inst["upstream_tunnel"] = merged.upstream_tunnel
+        inst["ssh_port"] = merged.ssh_port
+        inst["ssh_user"] = merged.ssh_user
         if merged.cascade_enabled:
             # middle-proxy / ad_tag ломают custom upstream
             inst["middle_proxy"] = False
@@ -1196,10 +1471,32 @@ async def set_cascade(iid: int, body: InstIn):
     return {"ok": True, "cascade_active": cascade_on(inst)}
 
 
-@app.get("/api/instances/{iid}/cascade/script", dependencies=[Depends(require_auth)])
-def instance_exit_script(iid: int):
-    """Скрипт exit с уже сохранёнными (или сгенерированными) кредами инстанса."""
+@app.post("/api/instances/{iid}/tunnel/reset-hostkey", dependencies=[Depends(require_auth)])
+async def tunnel_reset_hostkey(iid: int):
+    """Забыть сохранённый ключ хоста exit (после переустановки exit) и переподключить туннель."""
     inst = store.get(iid)
+    host = (inst.get("upstream_host") or "").strip()
+    if host:
+        known_hosts_path(host).unlink(missing_ok=True)
+    await restart_instance(inst)
+    return {"ok": True}
+
+
+@app.get("/api/instances/{iid}/cascade/script", dependencies=[Depends(require_auth)])
+def instance_exit_script(iid: int, tunnel: int = -1):
+    """Скрипт exit. tunnel=1 — режим SSH-туннеля, 0 — прямой SOCKS5, по умолчанию как сохранено в инстансе."""
+    inst = store.get(iid)
+    use_tunnel = bool(inst.get("upstream_tunnel", False)) if tunnel < 0 else bool(tunnel)
+    if use_tunnel:
+        ssh_user = inst.get("ssh_user") or DEFAULT_SSH_USER
+        port = int(inst.get("upstream_port") or 1080)
+        pub = cascade_ssh_pubkey()["pubkey"]
+        return {
+            "script": build_exit_script_tunnel(pub, ssh_user, port),
+            "tunnel": True, "upstream_type": "socks5", "upstream_port": port, "ssh_user": ssh_user,
+            "upstream_host": inst.get("upstream_host") or "",
+            "cascade_enabled": bool(inst.get("cascade_enabled")),
+        }
     user = (inst.get("upstream_user") or "").strip() or "telemt"
     password = (inst.get("upstream_pass") or "").strip() or secrets.token_urlsafe(14)
     port = int(inst.get("upstream_port") or 1080)

@@ -285,7 +285,7 @@ function render(){
         h('div',{class:'row'},
           h('span',{}, h('span',{class:'led '+cls}), txt),
           h('span',{class:'spacer'}),
-          i.cascade_active ? h('span',{class:'pill web'},'каскад') : null,
+          i.cascade_active ? h('span',{class:'pill web'}, i.upstream_tunnel ? ('каскад · ssh'+((i.tunnel&&i.tunnel.up)?'':' ⚠')) : 'каскад') : null,
           h('span',{class:'pill '+(isWeb?'web':'tls')}, isWeb?'WEB':'FakeTLS')
         ),
         h('div',{class:'port',style:'margin-top:10px'}, isWeb ? '443' : i.port),
@@ -415,7 +415,7 @@ function cfgTab(body,i){
 }
 
 function formFields(i){
-  const v = i||{port:443,sni:'www.cloudflare.com',mss:'tspu',middle_proxy:false,ad_tag:'',mask_host:'',mask_port:443,enabled:true,name:'',transport:'tls',web_base_path:'',web_site:'default',cascade_enabled:false,upstream_type:'socks5',upstream_host:'',upstream_port:1080,upstream_user:'',upstream_pass:''};
+  const v = i||{port:443,sni:'www.cloudflare.com',mss:'tspu',middle_proxy:false,ad_tag:'',mask_host:'',mask_port:443,enabled:true,name:'',transport:'tls',web_base_path:'',web_site:'default',cascade_enabled:false,upstream_type:'socks5',upstream_host:'',upstream_port:1080,upstream_user:'',upstream_pass:'',upstream_tunnel:true,ssh_port:22,ssh_user:'telemt-tunnel'};
   const name=h('input',{value:v.name||'',placeholder:'необязательно',maxlength:40});
   const transport=h('select',{}, h('option',{value:'tls'},'FakeTLS (ee)'), h('option',{value:'web'},'WEB (tg://webproxy)'));
   transport.value = v.transport || 'tls';
@@ -437,25 +437,48 @@ function formFields(i){
   const en=h('input',{type:'checkbox',checked:v.enabled!==false});
   // cascade
   const cas=h('input',{type:'checkbox',checked:!!v.cascade_enabled});
+  const tun=h('input',{type:'checkbox',checked:v.upstream_tunnel!==false});
   const uh=h('input',{value:v.upstream_host||'',placeholder:'IP зарубежного VPS'});
   const up=h('input',{type:'number',min:1,max:65535,value:v.upstream_port||1080});
+  const sshp=h('input',{type:'number',min:1,max:65535,value:v.ssh_port||22});
+  const ssu=h('input',{value:v.ssh_user||'telemt-tunnel',placeholder:'telemt-tunnel'});
   const uu=h('input',{value:v.upstream_user||'',placeholder:'telemt'});
   const uw=h('input',{value:v.upstream_pass||'',placeholder:'пароль SOCKS'});
+  const lSsh=h('label',{},'SSH порт exit',sshp), lSsu=h('label',{},'SSH user',ssu);
+  const lUu=h('label',{},'SOCKS user',uu), lUw=h('label',{},'SOCKS pass',uw);
+  const lUp=h('label',{},'SOCKS на exit',up);
+  const tn=v.tunnel;
+  const tunStatus=h('p',{class:'hint'});
+  if(v.id && v.cascade_active && v.upstream_tunnel){
+    tunStatus.textContent = tn && tn.up ? ('Туннель: поднят (локально 127.0.0.1:'+tn.local_port+', перезапусков: '+tn.restarts+')')
+                                        : 'Туннель: НЕ поднят — смотрите строки [tunnel] в логах инстанса';
+    tunStatus.style.color = tn && tn.up ? '' : 'var(--danger, #e5484d)';
+  }
+  const resetBtn = v.id ? h('button',{type:'button',onclick:()=>act(async()=>{await api('POST',`/api/instances/${v.id}/tunnel/reset-hostkey`);},'Ключ хоста сброшен, туннель перезапущен')},'Сбросить ключ хоста') : null;
   const cascadeBox=h('div',{style:'margin-top:10px;padding:12px;border:1px solid var(--stroke);border-radius:var(--r2);background:var(--soft)'},
     h('label',{class:'inline'},cas,'Каскад: РФ → зарубежный SOCKS5'),
     h('p',{class:'hint'},'Клиенты ходят на этот сервер (WEB). До Telegram трафик уходит через exit. Ссылка не меняется при смене exit.'),
+    h('label',{class:'inline'},tun,'SSH-туннель до exit (рекомендуется)'),
+    h('p',{class:'hint'},'Открытый SOCKS5 через границу может молча резаться (CONNECT на IP Telegram зависает). Внутри SSH этого не видно, SOCKS на exit слушает только localhost. Туннель панель держит сама.'),
+    tunStatus,
     h('div',{class:'grid two'},
       h('label',{},'Exit host (IP)',uh),
-      h('label',{},'Exit port',up),
-      h('label',{},'SOCKS user',uu),
-      h('label',{},'SOCKS pass',uw)
+      lSsh, lSsu, lUp, lUu, lUw
     ),
     h('div',{class:'row',style:'margin-top:6px'},
-      h('button',{type:'button',onclick:()=>cascadeHelp(v.id)},'Скрипт для зарубежного VPS')
+      h('button',{type:'button',onclick:()=>cascadeHelp(v.id,tun.checked,{port:+up.value||1080,ssh_user:ssu.value.trim()||'telemt-tunnel'})},'Скрипт для зарубежного VPS'),
+      resetBtn
     )
   );
-  const syncCas=()=>{ const on=cas.checked; uh.disabled=up.disabled=uu.disabled=uw.disabled=!on; };
-  cas.addEventListener('change',syncCas); syncCas();
+  const syncCas=()=>{
+    const on=cas.checked, t=tun.checked;
+    tun.disabled=uh.disabled=up.disabled=!on;
+    sshp.disabled=ssu.disabled=!(on&&t);
+    uu.disabled=uw.disabled=!(on&&!t);
+    lSsh.style.display=lSsu.style.display=t?'':'none';
+    lUu.style.display=lUw.style.display=t?'none':'';
+  };
+  cas.addEventListener('change',syncCas); tun.addEventListener('change',syncCas); syncCas();
   const tlsBox=h('div',{}, h('label',{},'Порт',port), h('label',{},'SNI',sni),
     h('label',{},'ClientHello MSS',mssSel,mssNum),
     h('details',{}, h('summary',{style:'cursor:pointer;color:var(--muted);margin-bottom:8px'},'Дополнительно'),
@@ -484,30 +507,35 @@ function formFields(i){
     web_base_path:basePath.value.trim(), web_site:siteSel.value, web_decoy_upstream:'',
     cascade_enabled:cas.checked, upstream_type:'socks5',
     upstream_host:uh.value.trim(), upstream_port:+up.value||1080,
-    upstream_user:uu.value.trim(), upstream_pass:uw.value
+    upstream_user:uu.value.trim(), upstream_pass:uw.value,
+    upstream_tunnel:tun.checked, ssh_port:+sshp.value||22, ssh_user:ssu.value.trim()||'telemt-tunnel'
   })};
 }
 
-async function cascadeHelp(iid){
+async function cascadeHelp(iid, tunnel=true, opts={}){
   try{
     let data;
     if(iid){
-      data = await api('GET', `/api/instances/${iid}/cascade/script`);
+      data = await api('GET', `/api/instances/${iid}/cascade/script?tunnel=${tunnel?1:0}`);
     } else {
-      data = await api('POST','/api/cascade/exit-script',{upstream_port:1080});
+      data = await api('POST','/api/cascade/exit-script',{upstream_port:opts.port||1080, tunnel, ssh_user:opts.ssh_user||'telemt-tunnel'});
     }
     const pre = h('pre',{class:'log',style:'max-height:280px;white-space:pre-wrap'}, data.script);
+    const info = data.tunnel
+      ? `SSH-туннель: user=${data.ssh_user}  SOCKS на exit: 127.0.0.1:${data.upstream_port} (только localhost)`
+      : `user=${data.upstream_user}  pass=${data.upstream_pass}  port=${data.upstream_port}`;
+    const hint = data.tunnel
+      ? '1) Скопируйте скрипт на зарубежный сервер и выполните от root (он добавит ключ панели и поднимет SOCKS на localhost). 2) Из вывода впишите IP и SSH порт, включите «SSH-туннель», сохраните. Панель сама поднимет туннель. Ссылка WEB для клиентов не меняется.'
+      : '1) Скопируйте скрипт на зарубежный сервер и выполните от root. 2) IP из вывода впишите в «Exit host». 3) Сохраните инстанс. Ссылка WEB для клиентов не меняется.';
     const layer = h('div',{class:'overlay center',onclick:e=>{if(e.target===layer)layer.remove()}},
       h('div',{class:'dialog',style:'width:min(640px,96vw)'},
         h('h2',{},'Развёртка exit (зарубежный VPS)'),
-        h('p',{class:'hint'},'1) Скопируйте скрипт на зарубежный сервер и выполните от root. 2) IP из вывода впишите в «Exit host». 3) Сохраните инстанс. Ссылка WEB для клиентов не меняется.'),
-        h('div',{class:'mono',style:'margin-bottom:8px'},
-          `user=${data.upstream_user}  pass=${data.upstream_pass}  port=${data.upstream_port}`
-        ),
+        h('p',{class:'hint'},hint),
+        h('div',{class:'mono',style:'margin-bottom:8px'},info),
         pre,
         h('div',{class:'row',style:'margin-top:12px'},
           h('button',{class:'primary',onclick:()=>copy(data.script).then(()=>toast('Скрипт скопирован'))},'Копировать скрипт'),
-          h('button',{onclick:()=>copy(`${data.upstream_user}:${data.upstream_pass}@HOST:${data.upstream_port}`)},'Копировать креды'),
+          data.tunnel ? null : h('button',{onclick:()=>copy(`${data.upstream_user}:${data.upstream_pass}@HOST:${data.upstream_port}`)},'Копировать креды'),
           h('button',{onclick:()=>layer.remove()},'Закрыть')
         )
       )
