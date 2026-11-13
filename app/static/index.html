@@ -63,15 +63,17 @@ label.inline input{width:auto; margin:0}
 .hint{color:var(--muted); font-size:13px; margin:-4px 0 12px}
 .mono{font-family:var(--mono); font-size:12px; word-break:break-all}
 
-.shell{max-width:1100px; margin:0 auto; padding:18px 16px 48px}
+.shell{max-width:1100px; margin:0 auto; padding:18px 16px max(48px, env(safe-area-inset-bottom))}
 header.top{
-  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
-  padding:14px 18px; margin-bottom:18px;
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:14px 18px; margin-bottom:18px; min-height:56px;
   background:var(--glass); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
   border:1px solid var(--stroke); border-radius:var(--r); box-shadow:var(--shadow);
+  position:sticky; top:8px; z-index:10;
 }
-header.top h1{margin:0; font-size:17px; font-weight:650; letter-spacing:-.02em; flex:1}
-header.top .ver{color:var(--muted); font-size:12px}
+header.top h1{margin:0; font-size:17px; font-weight:650; letter-spacing:-.02em; flex:1; min-width:80px}
+header.top .ver{color:var(--muted); font-size:12px; max-width:40%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+header.top .nav{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
 
 .glass{
   background:var(--glass); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
@@ -85,11 +87,13 @@ header.top .ver{color:var(--muted); font-size:12px}
 .card{
   padding:16px; border-radius:var(--r); border:1px solid var(--stroke);
   background:var(--glass); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
-  cursor:pointer; transition:.2s;
+  cursor:pointer; transition:border-color .2s, box-shadow .2s;
+  min-height:148px; contain:layout style;
 }
-.card:hover{border-color:var(--stroke2); transform:translateY(-1px)}
-.card .port{font-size:28px; font-weight:700; letter-spacing:-.03em}
-.card .meta{color:var(--muted); font-size:13px; margin-top:4px}
+.card:hover{border-color:var(--stroke2); box-shadow:0 12px 28px rgba(0,0,0,.2)}
+.card:active{transform:none}
+.card .port{font-size:28px; font-weight:700; letter-spacing:-.03em; line-height:1.1}
+.card .meta{color:var(--muted); font-size:13px; margin-top:4px; min-height:1.2em}
 .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
 .spacer{flex:1}
 
@@ -141,23 +145,36 @@ header.top .ver{color:var(--muted); font-size:12px}
 .check:last-child{border:0}
 .check b{display:block}
 
-pre.log{
-  background:rgba(0,0,0,.35); color:#c8d8d6; font:12px/1.4 var(--mono);
-  padding:12px; border-radius:12px; max-height:55vh; overflow:auto; white-space:pre-wrap; word-break:break-all;
+pre.log, pre.cfg{
+  background:rgba(0,0,0,.42); color:#d5e8e4; font:12.5px/1.45 var(--mono);
+  padding:14px; border-radius:14px; max-height:55vh; overflow:auto; white-space:pre-wrap; word-break:break-word;
   border:1px solid var(--stroke);
+  -webkit-user-select:text; user-select:text;
+  -webkit-overflow-scrolling:touch;
+  tab-size:2;
 }
-pre.cfg{
-  background:rgba(0,0,0,.3); color:#d1e7e4; font:12px/1.45 var(--mono);
-  padding:12px; border-radius:12px; max-height:40vh; overflow:auto; white-space:pre-wrap;
-  border:1px solid var(--stroke);
+pre.cfg{max-height:40vh}
+.log-toolbar{
+  display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+  margin-bottom:10px; position:sticky; top:0; z-index:2;
+  padding:8px 0;
+  background:linear-gradient(180deg, var(--glass2) 70%, transparent);
 }
+.log-toolbar .meta{color:var(--muted); font-size:12px; margin-left:auto}
+.log-wrap pre.log{min-height:200px}
+.btn-sm{padding:7px 12px; font-size:13px; min-height:36px}
 
 .toast{
-  position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
-  background:var(--ink); color:var(--bg0); padding:11px 18px; border-radius:999px;
-  z-index:40; box-shadow:var(--shadow); max-width:90vw; text-align:center;
+  position:fixed; bottom:max(22px, env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+  background:rgba(15,23,42,.94); color:#f8fafc; padding:12px 18px; border-radius:14px;
+  z-index:50; box-shadow:var(--shadow); max-width:min(92vw,420px); text-align:center;
+  border:1px solid var(--stroke2); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+  font-size:14px; line-height:1.35;
 }
-.toast.err{background:var(--bad); color:#fff}
+.toast.err{background:rgba(190,40,70,.94); border-color:rgba(255,255,255,.15)}
+.toast.ok{background:rgba(6,95,70,.92)}
+.toast.show{animation:toastIn .2s ease}
+@keyframes toastIn{from{opacity:0; transform:translate(-50%,8px)} to{opacity:1; transform:translate(-50%,0)}}
 
 .login-wrap{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px}
 .login{
@@ -186,11 +203,19 @@ pre.cfg{
 @media(max-width:700px){
   .hide-s{display:none}
   .card .port{font-size:22px}
-  header.top{padding:12px 14px}
-  .drawer{width:100%}
+  header.top{padding:12px 14px; gap:8px; top:0; border-radius:0 0 var(--r) var(--r)}
+  header.top button{padding:10px 12px; font-size:13px}
+  .drawer{width:100%; padding:16px 14px max(40px, env(safe-area-inset-bottom))}
+  .user .row button{flex:1 1 auto; min-height:42px}
+  pre.log{max-height:62vh; font-size:12px}
+  .log-toolbar button{min-height:40px}
+  .dialog{width:min(100%,96vw); padding:18px 16px}
 }
 @media(prefers-reduced-motion:no-preference){
   .led.ok{transition:box-shadow .3s}
+}
+@media(prefers-reduced-motion:reduce){
+  .card,.toast,button{transition:none!important; animation:none!important}
 }
 </style>
 </head>
@@ -219,14 +244,38 @@ async function api(method, url, body){
   if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : (d.detail?.[0]?.msg || 'Ошибка '+r.status));
   return d;
 }
-function toast(msg, err){
-  const t = h('div',{class:'toast'+(err?' err':'')}, msg);
-  document.body.append(t); setTimeout(()=>t.remove(), 3200);
+function toast(msg, kind){
+  document.querySelectorAll('.toast').forEach(n=>n.remove());
+  const el = h('div',{class:'toast show'+(kind===true||kind==='err'?' err':kind==='ok'?' ok':'')}, msg);
+  document.body.append(el);
+  setTimeout(()=>el.remove(), 2800);
 }
-async function act(fn, ok){ try{ await fn(); if (ok) toast(ok); await refresh(); }catch(e){ if (e.message!=='login') toast(e.message,true); } }
+async function act(fn, ok){ try{ await fn(); if (ok) toast(ok,'ok'); await refresh(true); }catch(e){ if (e.message!=='login') toast(e.message,true); } }
 async function copy(text){
-  try{ await navigator.clipboard.writeText(text); toast('Скопировано'); }
-  catch{ toast('Не удалось скопировать', true); }
+  const t = (text == null ? '' : String(text));
+  if (!t){ toast('Нечего копировать', true); return false; }
+  try{
+    if (navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(t);
+      toast('Скопировано','ok');
+      return true;
+    }
+    throw new Error('no clipboard');
+  }catch{
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = t;
+      ta.setAttribute('readonly','');
+      ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select(); ta.setSelectionRange(0, t.length);
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (ok){ toast('Скопировано','ok'); return true; }
+    }catch{}
+    toast('Не удалось скопировать — выделите текст вручную', true);
+    return false;
+  }
 }
 function fmtB(n){ if(!n) return '0 B'; const u=['B','KB','MB','GB']; let i=0; let x=n; while(x>=1024&&i<u.length-1){x/=1024;i++} return x.toFixed(i?1:0)+' '+u[i]; }
 function ledOf(i){
@@ -255,12 +304,14 @@ function render(){
   const root = h('div',{class:'shell'});
   root.append(h('header',{class:'top'},
     h('h1',{},'telemt'),
-    h('span',{class:'ver'}, S.settings?.detected_host || ''),
-    h('button',{onclick:()=>systemDialog()},'Система'),
-    h('button',{onclick:()=>webWizard()},'WEB-прокси'),
-    h('button',{onclick:()=>instanceDialog()},'+ FakeTLS'),
-    h('button',{onclick:()=>cascadeHelp()},'Каскад / exit'),
-    h('button',{class:'ghost',onclick:()=>act(()=>api('POST','/api/logout'),null).then(showLogin)},'Выйти')
+    h('span',{class:'ver',title:S.settings?.detected_host||''}, S.settings?.detected_host || ''),
+    h('div',{class:'nav'},
+      h('button',{onclick:()=>systemDialog()},'Система'),
+      h('button',{onclick:()=>webWizard()},'WEB'),
+      h('button',{onclick:()=>instanceDialog()},'+ FakeTLS'),
+      h('button',{onclick:()=>cascadeHelp()},'Каскад'),
+      h('button',{class:'ghost',onclick:()=>act(()=>api('POST','/api/logout'),null).then(showLogin)},'Выйти')
+    )
   ));
 
   const main = h('div',{});
@@ -281,11 +332,11 @@ function render(){
       const [cls,txt] = ledOf(i);
       const isWeb = (i.transport||'tls')==='web';
       const conns = i.users.reduce((a,u)=>a+u.connections,0);
-      cards.append(h('div',{class:'card',tabindex:0,onclick:()=>openInstance(i.id),onkeydown:e=>{if(e.key==='Enter')openInstance(i.id)}},
+      cards.append(h('div',{class:'card','data-id':String(i.id),tabindex:0,onclick:()=>openInstance(i.id),onkeydown:e=>{if(e.key==='Enter')openInstance(i.id)}},
         h('div',{class:'row'},
-          h('span',{}, h('span',{class:'led '+cls}), txt),
+          h('span',{}, h('span',{class:'led '+cls}), h('span',{'data-status-text':''}, txt)),
           h('span',{class:'spacer'}),
-          i.cascade_active ? h('span',{class:'pill web'}, i.upstream_tunnel ? ('каскад · ssh '+(i.tunnel?i.tunnel.up_count+'/'+i.tunnel.total:'')+((i.tunnel&&i.tunnel.up_count===i.tunnel.total)?'':' ⚠')) : 'каскад') : null,
+          i.cascade_active ? h('span',{'data-cascade-pill':'',class:'pill web'}, i.upstream_tunnel ? ('каскад · ssh '+(i.tunnel?i.tunnel.up_count+'/'+i.tunnel.total:'')+((i.tunnel&&i.tunnel.up_count===i.tunnel.total)?'':' ⚠')) : 'каскад') : null,
           h('span',{class:'pill '+(isWeb?'web':'tls')}, isWeb?'WEB':'FakeTLS')
         ),
         h('div',{class:'port',style:'margin-top:10px'}, isWeb ? '443' : i.port),
@@ -294,9 +345,9 @@ function render(){
           ? ((i.web_base_path?('/'+i.web_base_path+' · '):'')+(i.cascade_active?('exit '+i.upstream_host+' · '):'')+'loopback '+(i.web_listen_port||'?'))
           : ((i.cascade_active?('exit '+i.upstream_host+' · '):'')+i.sni+' · MSS '+(i.mss||'авто'))),
         h('div',{class:'row',style:'margin-top:12px'},
-          h('span',{class:'meta'},'онлайн '+conns),
+          h('span',{'data-online':'',class:'meta'},'онлайн '+conns),
           h('span',{class:'spacer'}),
-          h('span',{class:'meta'},'всего '+i.stats.connections_total)
+          h('span',{'data-total':'',class:'meta'},'всего '+i.stats.connections_total)
         )
       ));
     }
@@ -317,16 +368,26 @@ function render(){
     h('div',{class:'row'},
       h('b',{},'Сайт и сертификат (Caddy)'),
       h('span',{class:'spacer'}),
-      h('span',{class:'pill'}, !c.managed?'внешний':(c.running?'Caddy работает':'Caddy остановлен')),
-      c.public_host ? h('span',{class:'pill'}, certOk?'сертификат ✓':'нет сертификата') : null,
+      h('span',{'data-caddy-run':'',class:'pill'}, !c.managed?'внешний':(c.running?'Caddy работает':'Caddy остановлен')),
+      c.public_host ? h('span',{'data-caddy-cert':'',class:'pill'}, certOk?'сертификат ✓':'нет сертификата') : null,
       h('button',{onclick:()=>caddyDialog()},'Подробнее')
     ),
     h('p',{class:'hint',style:'margin:10px 0 0'}, caddyHint)
   ));
 
   $app.replaceChildren(root);
-  const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#drawer-layer') && ['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName);
-  if (openId != null && !typing) drawDrawer();
+  // Не трогаем drawer при опросе, если открыты логи/настройки или идёт ввод — иначе меню и логи «прыгают»
+  const overlay = document.getElementById('drawer-layer');
+  const typing = document.activeElement && ['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName);
+  if (openId != null){
+    if (!overlay) drawDrawer();
+    else if (!typing && tab !== 'logs' && tab !== 'cfg' && tab !== 'diag') drawDrawer();
+    else {
+      const i = S.instances.find(x=>x.id===openId);
+      const st = overlay.querySelector('[data-drawer-status]');
+      if (i && st) st.textContent = (i.transport==='web'?'WEB · ':'FakeTLS · ')+ledOf(i)[1];
+    }
+  }
 }
 
 function openInstance(id){ openId = id; tab = 'users'; drawDrawer(); }
@@ -342,7 +403,7 @@ function drawDrawer(){
       h('div',{class:'row'},
         h('div',{},
           h('h2',{},i.name),
-          h('div',{class:'hint',style:'margin:0'}, (i.transport==='web'?'WEB · ':'FakeTLS · ')+ledOf(i)[1])
+          h('div',{'data-drawer-status':'',class:'hint',style:'margin:0'}, (i.transport==='web'?'WEB · ':'FakeTLS · ')+ledOf(i)[1])
         ),
         h('span',{class:'spacer'}),
         h('button',{onclick:closeDrawer},'✕')
@@ -379,7 +440,7 @@ function usersTab(body,i){
   for (const u of i.users){
     body.append(h('div',{class:'user'},
       h('div',{class:'row'}, h('span',{class:'name',style:'flex:1'},u.name), h('span',{class:'hint',style:'margin:0'},`онлайн ${u.connections} · IP ${u.ips} · ${fmtB(u.octets)}`)),
-      h('div',{class:'link'},u.link),
+      h('div',{class:'link',title:'Нажмите, чтобы скопировать',style:'cursor:pointer',onclick:()=>copy(u.link)},u.link||'—'),
       !u.link_from_api && h('div',{class:'hint'},'Ссылка собрана панелью — если не работает, подождите минуту.'),
       h('div',{class:'row'},
         h('button',{class:'primary',onclick:()=>copy(u.link)}, isWeb?'Копировать webproxy':'Копировать tg://'),
@@ -405,9 +466,55 @@ async function diagTab(body,i){
 }
 
 function logsTab(body,i){
-  const pre = h('pre',{class:'log'},'…'); body.append(pre);
-  const load = async()=>{ try{ const d=await api('GET',`/api/instances/${i.id}/logs`); const stick=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30; pre.textContent=d.lines.join('\n')||'Логов пока нет'; if(stick)pre.scrollTop=pre.scrollHeight; }catch{} };
-  load(); logTimer=setInterval(load,3000);
+  let paused = false;
+  let lastText = '';
+  const meta = h('span',{class:'meta'},'…');
+  const pre = h('pre',{class:'log',tabindex:'0'},'Загрузка логов…');
+  const btnPause = h('button',{class:'btn-sm',onclick:()=>{
+    paused = !paused;
+    btnPause.textContent = paused ? '▶ Продолжить' : '⏸ Пауза';
+    if (!paused) load(true);
+  }},'⏸ Пауза');
+  const toolbar = h('div',{class:'log-toolbar'},
+    h('button',{class:'btn-sm primary',onclick:()=>copy(lastText||pre.textContent)},'Копировать всё'),
+    h('button',{class:'btn-sm',onclick:()=>{
+      const lines = (lastText||pre.textContent||'').split('\n');
+      copy(lines.slice(-80).join('\n'));
+    }},'Копировать хвост'),
+    h('button',{class:'btn-sm',onclick:()=>{
+      try{
+        const blob = new Blob([lastText||pre.textContent||''], {type:'text/plain;charset=utf-8'});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `telemt-${i.id}-logs.txt`;
+        a.click();
+        setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+        toast('Файл логов скачан','ok');
+      }catch(e){ toast('Не удалось скачать', true); }
+    }},'Скачать .txt'),
+    btnPause,
+    h('button',{class:'btn-sm',onclick:()=>load(true)},'Обновить'),
+    meta
+  );
+  body.append(
+    h('p',{class:'hint',style:'margin-top:0'},'Логи можно выделить. На iPhone лучше «Копировать всё» (нужен HTTPS).'),
+    toolbar,
+    h('div',{class:'log-wrap'}, pre)
+  );
+  const load = async(force)=>{
+    if (paused && !force) return;
+    try{
+      const d = await api('GET',`/api/instances/${i.id}/logs`);
+      const text = (d.lines && d.lines.length) ? d.lines.join('\n') : 'Логов пока нет';
+      lastText = text;
+      const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 40;
+      if (pre.textContent !== text) pre.textContent = text;
+      if (stick) pre.scrollTop = pre.scrollHeight;
+      meta.textContent = (d.lines?.length||0) + ' строк' + (paused ? ' · пауза' : '');
+    }catch(e){ meta.textContent = 'ошибка загрузки'; }
+  };
+  load(true);
+  logTimer = setInterval(()=>load(false), 2500);
 }
 
 function cfgTab(body,i){
@@ -785,14 +892,51 @@ function caddyDialog(){
   document.body.append(layer);
 }
 
-async function refresh(){
+function softPatchCards(){
+  if(!S || !S.instances) return;
+  for(const i of S.instances){
+    const card = document.querySelector('.card[data-id="'+i.id+'"]');
+    if(!card) continue;
+    const [cls,txt] = ledOf(i);
+    const led = card.querySelector('.led');
+    if(led){ led.className = 'led '+cls; }
+    const statusSpan = card.querySelector('[data-status-text]');
+    if(statusSpan) statusSpan.textContent = txt;
+    const conns = i.users.reduce((a,u)=>a+(u.connections||0),0);
+    const online = card.querySelector('[data-online]');
+    if(online) online.textContent = 'онлайн '+conns;
+    const total = card.querySelector('[data-total]');
+    if(total) total.textContent = 'всего '+(i.stats?.connections_total||0);
+    const cas = card.querySelector('[data-cascade-pill]');
+    if(cas && i.cascade_active){
+      cas.textContent = i.upstream_tunnel
+        ? ('каскад · ssh '+(i.tunnel?i.tunnel.up_count+'/'+i.tunnel.total:'')+((i.tunnel&&i.tunnel.up_count===i.tunnel.total)?'':' ⚠'))
+        : 'каскад';
+    }
+  }
+  const c = S.caddy || {};
+  const certPill = document.querySelector('[data-caddy-cert]');
+  if(certPill) certPill.textContent = (c.cert&&c.cert.ok)?'сертификат ✓':'нет сертификата';
+  const runPill = document.querySelector('[data-caddy-run]');
+  if(runPill) runPill.textContent = !c.managed?'внешний':(c.running?'Caddy работает':'Caddy остановлен');
+}
+
+async function refresh(force){
   S = await api('GET','/api/state');
-  // system flags may live under different key — tolerate
   if(!S.system) S.system = {sysctl:true,firewall:true,rate_limit:true};
+  const overlayOpen = !!document.querySelector('.overlay');
+  // Пока открыт drawer/dialog — не пересобираем DOM (прыжки меню и сброс логов)
+  if (!force && overlayOpen){
+    softPatchCards();
+    const st = document.querySelector('[data-drawer-status]');
+    const i = openId!=null && S.instances.find(x=>x.id===openId);
+    if (st && i) st.textContent = (i.transport==='web'?'WEB · ':'FakeTLS · ')+ledOf(i)[1];
+    return;
+  }
   render();
 }
 async function start(){
-  try{ await refresh(); poll = setInterval(()=>{ refresh().catch(()=>{}); }, 5000); }
+  try{ await refresh(true); poll = setInterval(()=>{ refresh(false).catch(()=>{}); }, 5000); }
   catch(e){ if(e.message!=='login') showLogin(); }
 }
 start();
