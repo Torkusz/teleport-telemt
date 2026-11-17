@@ -601,7 +601,7 @@ function formFields(i){
     if(tn.up_count<tn.total) tunStatus.style.color='var(--danger, #e5484d)';
   }
   const exitsWrap=h('div',{},
-    h('p',{class:'hint'},'Для каждого exit панель держит свой SSH-туннель. Telemt распределяет новые соединения по весу (10:10:5 → 40%/40%/20%). Выполните «Скрипт» на каждом зарубежном VPS.'),
+    h('p',{class:'hint'},'Для каждого exit панель держит свой SSH-туннель. Telemt выбирает exit для каждого нового соединения случайно: чем больше вес и чем меньше задержка, тем чаще (при равной задержке доли равны долям весов). Открытое соединение остаётся на своём exit до закрытия. Выполните «Скрипт» на каждом зарубежном VPS.'),
     tunStatus, exitsBox,
     h('div',{class:'row',style:'margin-top:6px;gap:8px;flex-wrap:wrap'}, addBtn, checkBtn, resetBtn)
   );
